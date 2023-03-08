@@ -54,8 +54,8 @@ rm -rf build-Linux
 exit_if_failed
 echo ""
 
-echo "Run build script"
-./build_binary.sh
+echo "Run build"
+make
 exit_if_failed
 echo ""
 
