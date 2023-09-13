@@ -36,7 +36,7 @@ type scanIterator struct {
 	scanMetadata       map[string]*proto.QueryMetadata
 	pluginRowStream    proto.WrapperPlugin_ExecuteClient
 	rel                *types.Relation
-	hub                *Hub
+	hub                *RemoteHub
 	table              string
 	connectionName     string
 	connectionLimitMap map[string]int64
@@ -49,7 +49,7 @@ type scanIterator struct {
 	callId    string
 }
 
-func newScanIterator(hub *Hub, connectionPlugin *steampipeconfig.ConnectionPlugin, connectionName, table string, connectionLimitMap map[string]int64, qualMap map[string]*proto.Quals, columns []string, limit int64, traceCtx *telemetry.TraceCtx) *scanIterator {
+func newScanIterator(hub *RemoteHub, connectionPlugin *steampipeconfig.ConnectionPlugin, connectionName, table string, connectionLimitMap map[string]int64, qualMap map[string]*proto.Quals, columns []string, limit int64, traceCtx *telemetry.TraceCtx) *scanIterator {
 	return &scanIterator{
 		status:             QueryStatusReady,
 		rows:               make(chan *proto.Row, rowBufferSize),

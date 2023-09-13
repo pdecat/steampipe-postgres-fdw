@@ -1,39 +1,40 @@
 package hub
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"path"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/turbot/go-kit/helpers"
+	"github.com/turbot/steampipe-plugin-sdk/v5/grpc"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
 	"github.com/turbot/steampipe-plugin-sdk/v5/logging"
+	"github.com/turbot/steampipe-plugin-sdk/v5/plugin"
+	"github.com/turbot/steampipe-plugin-sdk/v5/telemetry"
+	"github.com/turbot/steampipe-postgres-fdw/settings"
 	"github.com/turbot/steampipe-postgres-fdw/types"
-	"sync"
+	"github.com/turbot/steampipe/pkg/constants"
+	"github.com/turbot/steampipe/pkg/filepaths"
+	"github.com/turbot/steampipe/pkg/steampipeconfig"
+	"github.com/turbot/steampipe/pkg/steampipeconfig/modconfig"
+	"github.com/turbot/steampipe/pkg/utils"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
-
-type Hub interface {
-	LoadConnectionConfig() (bool, error)
-	GetSchema(remoteSchema string, localSchema string) (*proto.Schema, error)
-	GetIterator(columns []string, quals *proto.Quals, unhandledRestrictions int, limit int64, opts types.Options) (Iterator, error)
-	GetRelSize(columns []string, quals []*proto.Qual, opts types.Options) (types.RelSize, error)
-	GetPathKeys(opts types.Options) ([]types.PathKey, error)
-	Explain(columns []string, quals []*proto.Qual, sortKeys []string, verbose bool, opts types.Options) ([]string, error)
-	ApplySetting(key string, value string) error
-	GetSettingsSchema() map[string]*proto.TableSchema
-	GetLegacySettingsSchema() map[string]*proto.TableSchema
-	StartScan(i Iterator) error
-	RemoveIterator(iterator Iterator)
-	EndScan(iter Iterator, limit int64)
-	AddScanMetadata(iter Iterator)
-	Abort()
-	Close()
-	HandleLegacyCacheCommand(command string) error
-	ValidateCacheCommand(command string) error
-}
-
 
 const (
 	rowBufferSize = 100
 )
 
-// Hub is a structure representing plugin hub
-type Hub struct {
+// RemoteHub is a structure representing plugin hub
+type RemoteHub struct {
 	connections *connectionFactory
 
 	// list of iterators currently executing scans
@@ -41,6 +42,9 @@ type Hub struct {
 
 	// cacheSettings
 	cacheSettings *settings.HubCacheSettings
+
+	timingLock   sync.Mutex
+	lastScanTime time.Time
 
 	// telemetry properties
 	// callback function to shutdown telemetry
@@ -52,40 +56,11 @@ type Hub struct {
 	scanMetadata []ScanMetadata
 }
 
-// global hub instance
-var hubSingleton *RemoteHub
-
-// mutex protecting hub creation
-var hubMux sync.Mutex
-
-//// lifecycle ////
-
-// GetHub returns a hub singleton
-// if there is an existing hub singleton instance return it, otherwise create it
-// if a hub exists, but a different pluginDir is specified, reinitialise the hub with the new dir
-func GetHub() (Hub, error) {
-	logging.LogTime("GetHub start")
-
-	// lock access to singleton
-	hubMux.Lock()
-	defer hubMux.Unlock()
-
-	var err error
-	if hubSingleton == nil {
-		hubSingleton, err = newRemoteHub()
-		if err != nil {
-			return nil, err
-		}
-	}
-	logging.LogTime("GetHub end")
-	return hubSingleton, err
-}
-
-func newHub() (*Hub, error) {
-	hub := &Hub{}
+func newRemoteHub() (*RemoteHub, error) {
+	hub := &RemoteHub{}
 	hub.connections = newConnectionFactory(hub)
 
-	hub.cacheSettings = settings.NewCacheSettings(hub.clearConnectionCache)
+	hub.cacheSettings = settings.NewCacheSettings()
 
 	// TODO CHECK TELEMETRY ENABLED?
 	if err := hub.initialiseTelemetry(); err != nil {
@@ -101,7 +76,6 @@ func newHub() (*Hub, error) {
 	}
 	filepaths.SteampipeDir = steampipeDir
 
-	log.Printf("[INFO] newHub Hub.LoadConnectionConfig ")
 	if _, err := hub.LoadConnectionConfig(); err != nil {
 		return nil, err
 	}
@@ -109,7 +83,7 @@ func newHub() (*Hub, error) {
 	return hub, nil
 }
 
-func (h *Hub) initialiseTelemetry() error {
+func (h *RemoteHub) initialiseTelemetry() error {
 	log.Printf("[TRACE] init telemetry")
 	shutdownTelemetry, err := telemetry.Init(constants.FdwName)
 	if err != nil {
@@ -141,12 +115,12 @@ func getInstallDirectory() (string, error) {
 	return path.Join(wd, "../../.."), nil
 }
 
-func (h *Hub) addIterator(iterator Iterator) {
+func (h *RemoteHub) addIterator(iterator Iterator) {
 	h.runningIterators = append(h.runningIterators, iterator)
 }
 
 // RemoveIterator removes an iterator from list of running iterators
-func (h *Hub) RemoveIterator(iterator Iterator) {
+func (h *RemoteHub) RemoveIterator(iterator Iterator) {
 	for idx, it := range h.runningIterators {
 		if it == iterator {
 			// remove from list
@@ -157,7 +131,7 @@ func (h *Hub) RemoveIterator(iterator Iterator) {
 }
 
 // EndScan is called when Postgres terminates the scan (because it has received enough rows of data)
-func (h *Hub) EndScan(iter Iterator, limit int64) {
+func (h *RemoteHub) EndScan(iter Iterator, limit int64) {
 	// is the iterator still running? If so it means postgres is stopping a scan before all rows have been read
 	if iter.Status() == QueryStatusStarted {
 		h.AddScanMetadata(iter)
@@ -171,7 +145,7 @@ func (h *Hub) EndScan(iter Iterator, limit int64) {
 // AddScanMetadata adds the scan metadata from the given iterator to the hubs array
 // we append to this every time a scan completes (either due to end of data, or Postgres terminating)
 // the full array is returned whenever a pop_scan_metadata command is received and the array is cleared
-func (h *Hub) AddScanMetadata(iter Iterator) {
+func (h *RemoteHub) AddScanMetadata(iter Iterator) {
 	// nothing to do for an in memory iterator
 	if _, ok := iter.(*inMemoryIterator); ok {
 		return
@@ -225,12 +199,12 @@ func (h *Hub) AddScanMetadata(iter Iterator) {
 
 // ClearScanMetadata deletes all stored scan metadata. It is called by steampipe after retrieving timing information
 // for the previous query
-func (h *Hub) ClearScanMetadata() {
+func (h *RemoteHub) ClearScanMetadata() {
 	h.scanMetadata = nil
 }
 
 // Close shuts down all plugin clients
-func (h *Hub) Close() {
+func (h *RemoteHub) Close() {
 	log.Println("[TRACE] hub: close")
 
 	if h.telemetryShutdownFunc != nil {
@@ -240,8 +214,8 @@ func (h *Hub) Close() {
 }
 
 // Abort shuts down currently running queries
-func (h *Hub) Abort() {
-	log.Printf("[INFO] Hub Abort")
+func (h *RemoteHub) Abort() {
+	log.Printf("[INFO] RemoteHub Abort")
 	// for all running iterators
 	for _, iter := range h.runningIterators {
 		// read the scan metadata from the iterator and add to our stack
@@ -256,8 +230,8 @@ func (h *Hub) Abort() {
 //// public fdw functions ////
 
 // GetSchema returns the schema for a name. Load the plugin for the connection if needed
-func (h *Hub) GetSchema(remoteSchema string, localSchema string) (*proto.Schema, error) {
-	log.Printf("[TRACE] Hub GetSchema %s %s", remoteSchema, localSchema)
+func (h *RemoteHub) GetSchema(remoteSchema string, localSchema string) (*proto.Schema, error) {
+	log.Printf("[TRACE] RemoteHub GetSchema %s %s", remoteSchema, localSchema)
 	pluginFQN := remoteSchema
 	connectionName := localSchema
 	log.Printf("[TRACE] getSchema remoteSchema: %s, name %s\n", remoteSchema, connectionName)
@@ -266,12 +240,12 @@ func (h *Hub) GetSchema(remoteSchema string, localSchema string) (*proto.Schema,
 }
 
 // GetIterator creates and returns an iterator
-func (h *Hub) GetIterator(columns []string, quals *proto.Quals, unhandledRestrictions int, limit int64, opts types.Options) (Iterator, error) {
+func (h *RemoteHub) GetIterator(columns []string, quals *proto.Quals, unhandledRestrictions int, limit int64, opts types.Options) (Iterator, error) {
 	logging.LogTime("GetIterator start")
 	qualMap, err := h.buildQualMap(quals)
 	connectionName := opts["connection"]
 	table := opts["table"]
-	log.Printf("[TRACE] Hub GetIterator() table '%s'", table)
+	log.Printf("[TRACE] RemoteHub GetIterator() table '%s'", table)
 
 	if connectionName == constants.InternalSchema || connectionName == constants.LegacyCommandSchema {
 		return h.executeCommandScan(connectionName, table)
@@ -282,17 +256,16 @@ func (h *Hub) GetIterator(columns []string, quals *proto.Quals, unhandledRestric
 	iterator, err := h.startScanForConnection(connectionName, table, qualMap, unhandledRestrictions, columns, limit, scanTraceCtx)
 
 	if err != nil {
-		log.Printf("[TRACE] Hub GetIterator() failed :( %s", err)
+		log.Printf("[TRACE] RemoteHub GetIterator() failed :( %s", err)
 		return nil, err
 	}
-	log.Printf("[TRACE] Hub GetIterator() created iterator (%p)", iterator)
+	log.Printf("[TRACE] RemoteHub GetIterator() created iterator (%p)", iterator)
 
 	return iterator, nil
 }
 
 // LoadConnectionConfig loads the connection config and returns whether it has changed
-func (h *Hub) LoadConnectionConfig() (bool, error) {
-	log.Printf("[INFO] Hub.LoadConnectionConfig ")
+func (h *RemoteHub) LoadConnectionConfig() (bool, error) {
 	// load connection conFig
 	connectionConfig, errorsAndWarnings := steampipeconfig.LoadConnectionConfig()
 	if errorsAndWarnings.GetError() != nil {
@@ -316,7 +289,7 @@ func (h *Hub) LoadConnectionConfig() (bool, error) {
 //	        applied to this scan.
 //	Returns:
 //	    A struct of the form (expected_number_of_rows, avg_row_width (in bytes))
-func (h *Hub) GetRelSize(columns []string, quals []*proto.Qual, opts types.Options) (types.RelSize, error) {
+func (h *RemoteHub) GetRelSize(columns []string, quals []*proto.Qual, opts types.Options) (types.RelSize, error) {
 	result := types.RelSize{
 		// Default to 1M rows, because these tables are typically expensive
 		// relative to standard postgres.
@@ -366,7 +339,7 @@ func (h *Hub) GetRelSize(columns []string, quals []*proto.Qual, opts types.Optio
 //	    this path might return for a simple lookup.
 //	    For example, the return value corresponding to the previous scenario would be::
 //	        [(('id',), 1)]
-func (h *Hub) GetPathKeys(opts types.Options) ([]types.PathKey, error) {
+func (h *RemoteHub) GetPathKeys(opts types.Options) ([]types.PathKey, error) {
 	connectionName := opts["connection"]
 	table := opts["table"]
 
@@ -423,14 +396,14 @@ func (h *Hub) GetPathKeys(opts types.Options) ([]types.PathKey, error) {
 //
 //	Returns:
 //	    An iterable of strings to display in the EXPLAIN output.
-func (h *Hub) Explain(columns []string, quals []*proto.Qual, sortKeys []string, verbose bool, opts types.Options) ([]string, error) {
+func (h *RemoteHub) Explain(columns []string, quals []*proto.Qual, sortKeys []string, verbose bool, opts types.Options) ([]string, error) {
 	return make([]string, 0), nil
 }
 
 //// internal implementation ////
 
-func (h *Hub) traceContextForScan(table string, columns []string, limit int64, qualMap map[string]*proto.Quals, connectionName string) *telemetry.TraceCtx {
-	ctx, span := telemetry.StartSpan(context.Background(), constants.FdwName, "Hub.Scan (%s)", table)
+func (h *RemoteHub) traceContextForScan(table string, columns []string, limit int64, qualMap map[string]*proto.Quals, connectionName string) *telemetry.TraceCtx {
+	ctx, span := telemetry.StartSpan(context.Background(), constants.FdwName, "RemoteHub.Scan (%s)", table)
 	span.SetAttributes(
 		attribute.StringSlice("columns", columns),
 		attribute.String("table", table),
@@ -444,7 +417,7 @@ func (h *Hub) traceContextForScan(table string, columns []string, limit int64, q
 }
 
 // startScanForConnection starts a scan for a single connection, using a scanIterator or a legacyScanIterator
-func (h *Hub) startScanForConnection(connectionName string, table string, qualMap map[string]*proto.Quals, unhandledRestrictions int, columns []string, limit int64, scanTraceCtx *telemetry.TraceCtx) (_ Iterator, err error) {
+func (h *RemoteHub) startScanForConnection(connectionName string, table string, qualMap map[string]*proto.Quals, unhandledRestrictions int, columns []string, limit int64, scanTraceCtx *telemetry.TraceCtx) (_ Iterator, err error) {
 	defer func() {
 		if err != nil {
 			// close the span in case of errir
@@ -452,7 +425,7 @@ func (h *Hub) startScanForConnection(connectionName string, table string, qualMa
 		}
 	}()
 
-	log.Printf("[TRACE] Hub startScanForConnection '%s'", connectionName)
+	log.Printf("[TRACE] RemoteHub startScanForConnection '%s'", connectionName)
 	// get connection plugin for this connection
 	connectionPlugin, err := h.getConnectionPlugin(connectionName)
 	if err != nil {
@@ -497,7 +470,7 @@ func (h *Hub) startScanForConnection(connectionName string, table string, qualMa
 	return iterator, nil
 }
 
-func (h *Hub) buildConnectionLimitMap(table string, qualMap map[string]*proto.Quals, unhandledRestrictions int, connectionNames []string, limit int64, connectionPlugin *steampipeconfig.ConnectionPlugin) (map[string]int64, error) {
+func (h *RemoteHub) buildConnectionLimitMap(table string, qualMap map[string]*proto.Quals, unhandledRestrictions int, connectionNames []string, limit int64, connectionPlugin *steampipeconfig.ConnectionPlugin) (map[string]int64, error) {
 	log.Printf("[TRACE] buildConnectionLimitMap, table: '%s', %d %s, limit: %d", table, len(connectionNames), utils.Pluralize("connection", len(connectionNames)), limit)
 
 	connectionSchema, err := connectionPlugin.GetSchema(connectionNames[0])
@@ -534,7 +507,7 @@ func (h *Hub) buildConnectionLimitMap(table string, qualMap map[string]*proto.Qu
 // determine whether to include the limit, based on the quals
 // we ONLY pushdown the limit if all quals have corresponding key columns,
 // and if the qual operator is supported by the key column
-func (h *Hub) shouldPushdownLimit(table string, qualMap map[string]*proto.Quals, unhandledRestrictions int, connectionSchema *proto.Schema) bool {
+func (h *RemoteHub) shouldPushdownLimit(table string, qualMap map[string]*proto.Quals, unhandledRestrictions int, connectionSchema *proto.Schema) bool {
 	// if we have any unhandled restrictions, we CANNOT push limit down
 	if unhandledRestrictions > 0 {
 		return false
@@ -584,13 +557,16 @@ func (h *Hub) shouldPushdownLimit(table string, qualMap map[string]*proto.Quals,
 }
 
 // StartScan starts a scan (for scanIterators only = legacy iterators will have already started)
-func (h *Hub) StartScan(i Iterator) error {
+func (h *RemoteHub) StartScan(i Iterator) error {
 	// iterator must be a scan iterator
 	// if iterator is not a scan iterator, do nothing
 	iterator, ok := i.(*scanIterator)
 	if !ok {
 		return nil
 	}
+
+	// ensure we do not call execute too frequently
+	h.throttle()
 
 	table := iterator.table
 	connectionPlugin := iterator.connectionPlugin
@@ -637,7 +613,7 @@ func (h *Hub) StartScan(i Iterator) error {
 // getConnectionPlugin returns the connectionPlugin for the provided connection
 // it also makes sure that the plugin is up and running.
 // if the plugin is not running, it attempts to restart the plugin - errors if unable
-func (h *Hub) getConnectionPlugin(connectionName string) (*steampipeconfig.ConnectionPlugin, error) {
+func (h *RemoteHub) getConnectionPlugin(connectionName string) (*steampipeconfig.ConnectionPlugin, error) {
 	log.Printf("[TRACE] hub.getConnectionPlugin for connection '%s`", connectionName)
 
 	// get the plugin FQN
@@ -658,7 +634,7 @@ func (h *Hub) getConnectionPlugin(connectionName string) (*steampipeconfig.Conne
 	return c, nil
 }
 
-func (h *Hub) cacheEnabled(connectionName string) bool {
+func (h *RemoteHub) cacheEnabled(connectionName string) bool {
 	if h.cacheSettings.Enabled != nil {
 		return *h.cacheSettings.Enabled
 	}
@@ -672,7 +648,7 @@ func (h *Hub) cacheEnabled(connectionName string) bool {
 	return *connectionOptions.Cache
 }
 
-func (h *Hub) cacheTTL(connectionName string) time.Duration {
+func (h *RemoteHub) cacheTTL(connectionName string) time.Duration {
 	// if the cache ttl has been overridden, then enforce the value
 	if h.cacheSettings.Ttl != nil {
 		return *h.cacheSettings.Ttl
@@ -696,12 +672,12 @@ func (h *Hub) cacheTTL(connectionName string) time.Duration {
 	return ttl
 }
 
-func (h *Hub) ApplySetting(key string, value string) error {
+func (h *RemoteHub) ApplySetting(key string, value string) error {
 	log.Printf("[TRACE] ApplySetting [%s => %s]", key, value)
 	return h.cacheSettings.Apply(key, value)
 }
 
-func (h *Hub) GetSettingsSchema() map[string]*proto.TableSchema {
+func (h *RemoteHub) GetSettingsSchema() map[string]*proto.TableSchema {
 	return map[string]*proto.TableSchema{
 		constants.ForeignTableSettings: {
 			Columns: []*proto.ColumnDefinition{
@@ -726,7 +702,7 @@ func (h *Hub) GetSettingsSchema() map[string]*proto.TableSchema {
 	}
 }
 
-func (h *Hub) GetLegacySettingsSchema() map[string]*proto.TableSchema {
+func (h *RemoteHub) GetLegacySettingsSchema() map[string]*proto.TableSchema {
 	return map[string]*proto.TableSchema{
 		constants.LegacyCommandTableCache: {
 			Columns: []*proto.ColumnDefinition{
@@ -750,7 +726,21 @@ func (h *Hub) GetLegacySettingsSchema() map[string]*proto.TableSchema {
 	}
 }
 
-func (h *Hub) executeCommandScan(connectionName, table string) (Iterator, error) {
+// ensure we do not call execute too frequently
+// NOTE: this is a workaround for legacy plugin - it is not necessary for plugins built with sdk > 0.8.0
+func (h *RemoteHub) throttle() {
+	minScanInterval := 10 * time.Millisecond
+	h.timingLock.Lock()
+	defer h.timingLock.Unlock()
+	timeSince := time.Since(h.lastScanTime)
+	if timeSince < minScanInterval {
+		sleepTime := minScanInterval - timeSince
+		time.Sleep(sleepTime)
+	}
+	h.lastScanTime = time.Now()
+}
+
+func (h *RemoteHub) executeCommandScan(connectionName, table string) (Iterator, error) {
 	switch table {
 	case constants.ForeignTableScanMetadata, constants.LegacyCommandTableScanMetadata:
 		res := &QueryResult{
@@ -765,7 +755,7 @@ func (h *Hub) executeCommandScan(connectionName, table string) (Iterator, error)
 	}
 }
 
-func (h *Hub) HandleLegacyCacheCommand(command string) error {
+func (h *RemoteHub) HandleLegacyCacheCommand(command string) error {
 	if err := h.ValidateCacheCommand(command); err != nil {
 		return err
 	}
@@ -785,27 +775,11 @@ func (h *Hub) HandleLegacyCacheCommand(command string) error {
 	return nil
 }
 
-func (h *Hub) ValidateCacheCommand(command string) error {
+func (h *RemoteHub) ValidateCacheCommand(command string) error {
 	validCommands := []string{constants.LegacyCommandCacheClear, constants.LegacyCommandCacheOn, constants.LegacyCommandCacheOff}
 
 	if !helpers.StringSliceContains(validCommands, command) {
 		return fmt.Errorf("invalid command '%s' - supported commands are %s", command, strings.Join(validCommands, ","))
 	}
 	return nil
-}
-
-func (h *Hub) clearConnectionCache(connection string) error {
-	log.Printf("[INFO] clear connection cache for connection '%s'", connection)
-	connectionPlugin, err := h.getConnectionPlugin(connection)
-	if err != nil {
-		log.Printf("[WARN] clearConnectionCache failed for connection %s: %s", connection, err)
-		return err
-	}
-
-	_, err = connectionPlugin.PluginClient.SetConnectionCacheOptions(&proto.SetConnectionCacheOptionsRequest{ClearCacheForConnection: connection})
-	if err != nil {
-		log.Printf("[WARN] clearConnectionCache failed for connection %s: SetConnectionCacheOptions returned %s", connection, err)
-	}
-	log.Printf("[INFO] clear connection cache succeeded")
-	return err
 }
