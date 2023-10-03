@@ -10,24 +10,55 @@ import (
 	"github.com/turbot/steampipe-postgres-fdw/settings"
 	"github.com/turbot/steampipe-postgres-fdw/types"
 	"github.com/turbot/steampipe/pkg/constants"
+	"github.com/turbot/steampipe/pkg/ociinstaller"
 	"github.com/turbot/steampipe/pkg/steampipeconfig/modconfig"
+	"golang.org/x/exp/maps"
 	"log"
 )
 
-type LocalHub struct {
+type HubLocal struct {
 	hubBase
-	plugin *grpc.PluginServer
+	plugin      *grpc.PluginServer
+	pluginName  string
+	pluginAlias string
+	connections map[string]*proto.ConnectionConfig
 }
 
-func newLocalHub() (*LocalHub, error) {
+func (l *HubLocal) SetConnectionConfig(connections map[string]string) error {
+	l.connections = make(map[string]*proto.ConnectionConfig, len(connections))
+
+	for connectionName, configString := range connections {
+		l.connections[connectionName] =
+			&proto.ConnectionConfig{
+				Connection:      connectionName,
+				Plugin:          l.pluginName,
+				PluginShortName: l.pluginAlias,
+				Config:          configString,
+				PluginInstance:  l.pluginName,
+			}
+	}
+	_, err := l.plugin.SetAllConnectionConfigs(&proto.SetAllConnectionConfigsRequest{
+		Configs: maps.Values(l.connections),
+	})
+	return err
+}
+
+func newLocalHub(connections map[string]string) (*HubLocal, error) {
+	// todo make a build parameter
+	pluginAlias := "aws"
+	imageRef := ociinstaller.NewSteampipeImageRef(pluginAlias).DisplayImageRef()
 	// TODO dynamically control the plugin func at build time
-	hub := &LocalHub{
+	hub := &HubLocal{
 		plugin: plugin.NewPluginServer(&plugin.ServeOpts{
 			PluginFunc: aws.Plugin,
 		}),
+		pluginName:  imageRef,
+		pluginAlias: pluginAlias,
 	}
-
-	hub.cacheSettings = settings.NewCacheSettings()
+	hub.cacheSettings = settings.NewCacheSettings(hub.clearConnectionCache)
+	if err := hub.SetConnectionConfig(connections); err != nil {
+		return nil, err
+	}
 
 	// TODO CHECK TELEMETRY ENABLED?
 	if err := hub.initialiseTelemetry(); err != nil {
@@ -37,12 +68,12 @@ func newLocalHub() (*LocalHub, error) {
 	return hub, nil
 }
 
-func (l *LocalHub) LoadConnectionConfig() (bool, error) {
+func (l *HubLocal) LoadConnectionConfig() (bool, error) {
 	// do nothing
 	return false, nil
 }
 
-func (l *LocalHub) GetSchema(pluginImageRef, connectionName string) (*proto.Schema, error) {
+func (l *HubLocal) GetSchema(_, connectionName string) (*proto.Schema, error) {
 	res, err := l.plugin.GetSchema(&proto.GetSchemaRequest{Connection: connectionName})
 	if err != nil {
 		return nil, err
@@ -50,7 +81,7 @@ func (l *LocalHub) GetSchema(pluginImageRef, connectionName string) (*proto.Sche
 	return res.GetSchema(), nil
 }
 
-func (l *LocalHub) GetIterator(columns []string, quals *proto.Quals, unhandledRestrictions int, limit int64, opts types.Options) (Iterator, error) {
+func (l *HubLocal) GetIterator(columns []string, quals *proto.Quals, unhandledRestrictions int, limit int64, opts types.Options) (Iterator, error) {
 	logging.LogTime("GetIterator start")
 	qualMap, err := buildQualMap(quals)
 	connectionName := opts["connection"]
@@ -74,82 +105,20 @@ func (l *LocalHub) GetIterator(columns []string, quals *proto.Quals, unhandledRe
 	return iterator, nil
 }
 
-func (l *LocalHub) GetPathKeys(opts types.Options) ([]types.PathKey, error) {
+func (l *HubLocal) GetPathKeys(opts types.Options) ([]types.PathKey, error) {
+	connectionName := opts["connection"]
+
+	connectionSchema, err := l.plugin.GetSchema(&proto.GetSchemaRequest{Connection: connectionName})
 	if err != nil {
 		return nil, err
 	}
 
-	connectionSchema, err := connectionPlugin.GetSchema(connectionName)
-	if err != nil {
-		return nil, err
-	}
+	return l.getPathKeys(connectionSchema.Schema, opts)
 
-	return h.getPathKeys(connectionSchema, opts)
-
-}
-
-func (l *LocalHub) Explain(columns []string, quals []*proto.Qual, sortKeys []string, verbose bool, opts types.Options) ([]string, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *LocalHub) ApplySetting(key string, value string) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *LocalHub) GetSettingsSchema() map[string]*proto.TableSchema {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *LocalHub) GetLegacySettingsSchema() map[string]*proto.TableSchema {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *LocalHub) StartScan(i Iterator) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *LocalHub) RemoveIterator(iterator Iterator) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *LocalHub) EndScan(iter Iterator, limit int64) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *LocalHub) AddScanMetadata(iter Iterator) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *LocalHub) Abort() {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *LocalHub) Close() {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *LocalHub) HandleLegacyCacheCommand(command string) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (l *LocalHub) ValidateCacheCommand(command string) error {
-	//TODO implement me
-	panic("implement me")
 }
 
 // startScanForConnection starts a scan for a single connection, using a scanIterator or a legacyScanIterator
-func (l *LocalHub) startScanForConnection(connectionName string, table string, qualMap map[string]*proto.Quals, unhandledRestrictions int, columns []string, limit int64, scanTraceCtx *telemetry.TraceCtx) (_ Iterator, err error) {
+func (l *HubLocal) startScanForConnection(connectionName string, table string, qualMap map[string]*proto.Quals, unhandledRestrictions int, columns []string, limit int64, scanTraceCtx *telemetry.TraceCtx) (_ Iterator, err error) {
 	defer func() {
 		if err != nil {
 			// close the span in case of errir
@@ -181,17 +150,17 @@ func (l *LocalHub) startScanForConnection(connectionName string, table string, q
 	}
 
 	log.Printf("[TRACE] startScanForConnection creating a new scan iterator")
-	iterator := newLocalScanIterator(l, connectionName, table, connectionLimitMap, qualMap, columns, limit, scanTraceCtx)
+	iterator := newScanIteratorLocal(l, connectionName, table, l.pluginName, connectionLimitMap, qualMap, columns, limit, scanTraceCtx)
 	return iterator, nil
 }
 
-func (l *LocalHub) getConnectionconfig(name string) (*modconfig.Connection, bool) {
+func (l *HubLocal) getConnectionconfig(name string) (*modconfig.Connection, bool) {
 	// TODO KAI how will we get connection config for connections
 	// pass into FDW as options???
 	return nil, false
 }
 
-func (l *LocalHub) buildConnectionLimitMap(connection, table string, qualMap map[string]*proto.Quals, unhandledRestrictions int, limit int64) (map[string]int64, error) {
+func (l *HubLocal) buildConnectionLimitMap(connection, table string, qualMap map[string]*proto.Quals, unhandledRestrictions int, limit int64) (map[string]int64, error) {
 	connectionSchema, err := l.GetSchema("", connection)
 	if err != nil {
 		return nil, err
@@ -220,4 +189,14 @@ func (l *LocalHub) buildConnectionLimitMap(connection, table string, qualMap map
 
 	//return ConnectionLimitMap, nil
 	return make(map[string]int64), nil
+}
+
+func (l *HubLocal) clearConnectionCache(connection string) error {
+
+	_, err := l.plugin.SetConnectionCacheOptions(&proto.SetConnectionCacheOptionsRequest{ClearCacheForConnection: connection})
+	if err != nil {
+		log.Printf("[WARN] clearConnectionCache failed for connection %s: SetConnectionCacheOptions returned %s", connection, err)
+	}
+	log.Printf("[INFO] clear connection cache succeeded")
+	return err
 }

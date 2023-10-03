@@ -3,14 +3,6 @@ package hub
 import (
 	"errors"
 	"fmt"
-	"log"
-	"os"
-	"path"
-	"strings"
-	"sync"
-	"time"
-
-	"github.com/turbot/go-kit/helpers"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
 	"github.com/turbot/steampipe-plugin-sdk/v5/logging"
@@ -23,6 +15,9 @@ import (
 	"github.com/turbot/steampipe/pkg/steampipeconfig"
 	"github.com/turbot/steampipe/pkg/steampipeconfig/modconfig"
 	"github.com/turbot/steampipe/pkg/utils"
+	"log"
+	"os"
+	"path"
 )
 
 const (
@@ -35,40 +30,13 @@ type RemoteHub struct {
 	connections *connectionFactory
 }
 
-// global hub instance
-var hubSingleton *RemoteHub
-
-// mutex protecting hub creation
-var hubMux sync.Mutex
-
 //// lifecycle ////
-
-// GetHub returns a hub singleton
-// if there is an existing hub singleton instance return it, otherwise create it
-// if a hub exists, but a different pluginDir is specified, reinitialise the hub with the new dir
-func GetHub() (Hub, error) {
-	logging.LogTime("GetHub start")
-
-	// lock access to singleton
-	hubMux.Lock()
-	defer hubMux.Unlock()
-
-	var err error
-	if hubSingleton == nil {
-		hubSingleton, err = newRemoteHub()
-		if err != nil {
-			return nil, err
-		}
-	}
-	logging.LogTime("GetHub end")
-	return hubSingleton, err
-}
 
 func newRemoteHub() (*RemoteHub, error) {
 	hub := &RemoteHub{}
 	hub.connections = newConnectionFactory(hub)
 
-	hub.cacheSettings = settings.NewCacheSettings()
+	hub.cacheSettings = settings.NewCacheSettings(hub.clearConnectionCache)
 
 	// TODO CHECK TELEMETRY ENABLED?
 	if err := hub.initialiseTelemetry(); err != nil {
@@ -269,57 +237,6 @@ func (h *RemoteHub) buildConnectionLimitMap(table string, qualMap map[string]*pr
 	return connectionLimitMap, nil
 }
 
-// StartScan starts a scan (for scanIterators only = legacy iterators will have already started)
-func (h *RemoteHub) StartScan(i Iterator) error {
-	// iterator must be a scan iterator
-	// if iterator is not a scan iterator, do nothing
-	iterator, ok := i.(*scanIterator)
-	if !ok {
-		return nil
-	}
-
-	table := iterator.table
-	connectionPlugin := iterator.connectionPlugin
-
-	req := &proto.ExecuteRequest{
-		Table:        table,
-		QueryContext: iterator.queryContext,
-		CallId:       iterator.callId,
-		// pass connection name - used for aggregators
-		Connection:            iterator.GetConnectionName(),
-		TraceContext:          grpc.CreateCarrierFromContext(iterator.traceCtx.Ctx),
-		ExecuteConnectionData: make(map[string]*proto.ExecuteConnectionData),
-	}
-
-	// build executeConnectionData map
-	for connectionName, limit := range iterator.connectionLimitMap {
-		data := &proto.ExecuteConnectionData{}
-		if limit != -1 {
-			data.Limit = &proto.NullableInt{Value: limit}
-		}
-		data.CacheTtl = int64(h.cacheTTL(connectionName).Seconds())
-		data.CacheEnabled = h.cacheEnabled(connectionName)
-
-		req.ExecuteConnectionData[connectionName] = data
-	}
-
-	log.Printf("[INFO] StartScan for table: %s, cache enabled: %v, iterator %p, %d quals (%s)", table, req.CacheEnabled, iterator, len(iterator.queryContext.Quals), iterator.callId)
-	stream, ctx, cancel, err := connectionPlugin.PluginClient.Execute(req)
-	// format GRPC errors and ignore not implemented errors for backwards compatibility
-	err = grpc.HandleGrpcError(err, connectionPlugin.PluginName, "Execute")
-	if err != nil {
-		log.Printf("[WARN] startScan: plugin Execute function callId: %s returned error: %v\n", iterator.callId, err)
-		iterator.setError(err)
-		return err
-	}
-	iterator.Start(stream, ctx, cancel)
-
-	// add iterator to running list
-	h.addIterator(iterator)
-
-	return nil
-}
-
 // getConnectionPlugin returns the connectionPlugin for the provided connection
 // it also makes sure that the plugin is up and running.
 // if the plugin is not running, it attempts to restart the plugin - errors if unable
@@ -344,123 +261,18 @@ func (h *RemoteHub) getConnectionPlugin(connectionName string) (*steampipeconfig
 	return c, nil
 }
 
-func (h *RemoteHub) cacheEnabled(connectionName string) bool {
-	if h.cacheSettings.Enabled != nil {
-		return *h.cacheSettings.Enabled
-	}
-	// ask the steampipe config for resolved plugin options - this will use default values where needed
-	connectionOptions := steampipeconfig.GlobalConfig.GetConnectionOptions(connectionName)
-
-	// the config loading code should ALWAYS populate the connection options, using defaults if needed
-	if connectionOptions.Cache == nil {
-		panic(fmt.Sprintf("No cache options found for connection %s", connectionName))
-	}
-	return *connectionOptions.Cache
-}
-
-func (h *RemoteHub) cacheTTL(connectionName string) time.Duration {
-	// if the cache ttl has been overridden, then enforce the value
-	if h.cacheSettings.Ttl != nil {
-		return *h.cacheSettings.Ttl
-	}
-
-	// ask the steampipe config for resolved plugin options - this will use default values where needed
-	connectionOptions := steampipeconfig.GlobalConfig.GetConnectionOptions(connectionName)
-
-	// the config loading code should ALWAYS populate the connection options, using defaults if needed
-	if connectionOptions.CacheTTL == nil {
-		panic(fmt.Sprintf("No cache options found for connection %s", connectionName))
-	}
-
-	ttl := time.Duration(*connectionOptions.CacheTTL) * time.Second
-
-	// would this give data earlier than the cacheClearTime
-	now := time.Now()
-	if now.Add(-ttl).Before(h.cacheSettings.ClearTime) {
-		ttl = now.Sub(h.cacheSettings.ClearTime)
-	}
-	return ttl
-}
-
-func (h *RemoteHub) ApplySetting(key string, value string) error {
-	log.Printf("[TRACE] ApplySetting [%s => %s]", key, value)
-	return h.cacheSettings.Apply(key, value)
-}
-
-func (h *RemoteHub) GetSettingsSchema() map[string]*proto.TableSchema {
-	return map[string]*proto.TableSchema{
-		constants.ForeignTableSettings: {
-			Columns: []*proto.ColumnDefinition{
-				{Name: constants.ForeignTableSettingsKeyColumn, Type: proto.ColumnType_STRING},
-				{Name: constants.ForeignTableSettingsValueColumn, Type: proto.ColumnType_STRING},
-			},
-		},
-		constants.ForeignTableScanMetadata: {
-			Columns: []*proto.ColumnDefinition{
-				{Name: "id", Type: proto.ColumnType_INT},
-				{Name: "table", Type: proto.ColumnType_STRING},
-				{Name: "cache_hit", Type: proto.ColumnType_BOOL},
-				{Name: "rows_fetched", Type: proto.ColumnType_INT},
-				{Name: "hydrate_calls", Type: proto.ColumnType_INT},
-				{Name: "start_time", Type: proto.ColumnType_TIMESTAMP},
-				{Name: "duration", Type: proto.ColumnType_DOUBLE},
-				{Name: "columns", Type: proto.ColumnType_JSON},
-				{Name: "limit", Type: proto.ColumnType_INT},
-				{Name: "quals", Type: proto.ColumnType_STRING},
-			},
-		},
-	}
-}
-
-func (h *RemoteHub) GetLegacySettingsSchema() map[string]*proto.TableSchema {
-	return map[string]*proto.TableSchema{
-		constants.LegacyCommandTableCache: {
-			Columns: []*proto.ColumnDefinition{
-				{Name: constants.LegacyCommandTableCacheOperationColumn, Type: proto.ColumnType_STRING},
-			},
-		},
-		constants.LegacyCommandTableScanMetadata: {
-			Columns: []*proto.ColumnDefinition{
-				{Name: "id", Type: proto.ColumnType_INT},
-				{Name: "table", Type: proto.ColumnType_STRING},
-				{Name: "cache_hit", Type: proto.ColumnType_BOOL},
-				{Name: "rows_fetched", Type: proto.ColumnType_INT},
-				{Name: "hydrate_calls", Type: proto.ColumnType_INT},
-				{Name: "start_time", Type: proto.ColumnType_TIMESTAMP},
-				{Name: "duration", Type: proto.ColumnType_DOUBLE},
-				{Name: "columns", Type: proto.ColumnType_JSON},
-				{Name: "limit", Type: proto.ColumnType_INT},
-				{Name: "quals", Type: proto.ColumnType_STRING},
-			},
-		},
-	}
-}
-
-func (h *RemoteHub) HandleLegacyCacheCommand(command string) error {
-	if err := h.ValidateCacheCommand(command); err != nil {
+func (h *RemoteHub) clearConnectionCache(connection string) error {
+	log.Printf("[INFO] clear connection cache for connection '%s'", connection)
+	connectionPlugin, err := h.getConnectionPlugin(connection)
+	if err != nil {
+		log.Printf("[WARN] clearConnectionCache failed for connection %s: %s", connection, err)
 		return err
 	}
 
-	log.Printf("[TRACE] HandleLegacyCacheCommand %s", command)
-
-	switch command {
-	case constants.LegacyCommandCacheClear:
-		// set the cache clear time for the remote query cache
-		h.cacheSettings.Apply(string(settings.SettingKeyCacheClearTimeOverride), "")
-
-	case constants.LegacyCommandCacheOn:
-		h.cacheSettings.Apply(string(settings.SettingKeyCacheEnabled), "true")
-	case constants.LegacyCommandCacheOff:
-		h.cacheSettings.Apply(string(settings.SettingKeyCacheClearTimeOverride), "false")
+	_, err = connectionPlugin.PluginClient.SetConnectionCacheOptions(&proto.SetConnectionCacheOptionsRequest{ClearCacheForConnection: connection})
+	if err != nil {
+		log.Printf("[WARN] clearConnectionCache failed for connection %s: SetConnectionCacheOptions returned %s", connection, err)
 	}
-	return nil
-}
-
-func (h *RemoteHub) ValidateCacheCommand(command string) error {
-	validCommands := []string{constants.LegacyCommandCacheClear, constants.LegacyCommandCacheOn, constants.LegacyCommandCacheOff}
-
-	if !helpers.StringSliceContains(validCommands, command) {
-		return fmt.Errorf("invalid command '%s' - supported commands are %s", command, strings.Join(validCommands, ","))
-	}
-	return nil
+	log.Printf("[INFO] clear connection cache succeeded")
+	return err
 }

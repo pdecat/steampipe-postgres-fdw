@@ -9,6 +9,7 @@ import (
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
 	"github.com/turbot/steampipe-plugin-sdk/v5/logging"
+	"github.com/turbot/steampipe-plugin-sdk/v5/row_stream"
 	"github.com/turbot/steampipe-plugin-sdk/v5/telemetry"
 	"github.com/turbot/steampipe-postgres-fdw/types"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -16,12 +17,12 @@ import (
 	"time"
 )
 
-type baseScanIterator struct {
+type scanIteratorBase struct {
 	status             queryStatus
 	err                error
 	rows               chan *proto.Row
 	scanMetadata       map[string]*proto.QueryMetadata
-	pluginRowStream    proto.WrapperPlugin_ExecuteClient
+	pluginRowStream    row_stream.Receiver
 	rel                *types.Relation
 	hub                Hub
 	table              string
@@ -35,8 +36,8 @@ type baseScanIterator struct {
 	callId    string
 }
 
-func newBaseScanIterator(hub Hub, connectionName, table string, connectionLimitMap map[string]int64, qualMap map[string]*proto.Quals, columns []string, limit int64, traceCtx *telemetry.TraceCtx) baseScanIterator {
-	return baseScanIterator{
+func newBaseScanIterator(hub Hub, connectionName, table string, connectionLimitMap map[string]int64, qualMap map[string]*proto.Quals, columns []string, limit int64, traceCtx *telemetry.TraceCtx) scanIteratorBase {
+	return scanIteratorBase{
 		status:             QueryStatusReady,
 		rows:               make(chan *proto.Row, rowBufferSize),
 		scanMetadata:       make(map[string]*proto.QueryMetadata),
@@ -53,21 +54,22 @@ func newBaseScanIterator(hub Hub, connectionName, table string, connectionLimitM
 
 // access functions
 
-func (i *baseScanIterator) GetConnectionName() string {
+func (i *scanIteratorBase) GetConnectionName() string {
 	return i.connectionName
 }
 
-func (i *baseScanIterator) Status() queryStatus {
+func (i *scanIteratorBase) Status() queryStatus {
 	return i.status
 }
 
-func (i *baseScanIterator) Error() error {
+func (i *scanIteratorBase) Error() error {
 	return i.err
 }
 
 // Next implements Iterator
 // return the next row. Nil row means there are no more rows to scan.
-func (i *baseScanIterator) Next() (map[string]interface{}, error) {
+func (i *scanIteratorBase) Next() (map[string]interface{}, error) {
+	log.Printf("[Trace] scanIteratorBase Next")
 	// check the iterator state - has an error occurred
 	if i.status == QueryStatusError {
 		return nil, i.err
@@ -76,8 +78,8 @@ func (i *baseScanIterator) Next() (map[string]interface{}, error) {
 
 	if !i.CanIterate() {
 		// this is a bug
-		log.Printf("[WARN] baseScanIterator cannot iterate: connection %s, status: %s", i.GetConnectionName(), i.Status())
-		return nil, fmt.Errorf("baseScanIterator cannot iterate: connection %s, status: %s", i.GetConnectionName(), i.Status())
+		log.Printf("[WARN] scanIteratorBase cannot iterate: connection %s, status: %s", i.GetConnectionName(), i.Status())
+		return nil, fmt.Errorf("scanIteratorBase cannot iterate: connection %s, status: %s", i.GetConnectionName(), i.Status())
 	}
 
 	row := <-i.rows
@@ -109,7 +111,7 @@ func (i *baseScanIterator) Next() (map[string]interface{}, error) {
 	return res, nil
 }
 
-func (i *baseScanIterator) closeSpan() {
+func (i *scanIteratorBase) closeSpan() {
 	// if we have scan metadata, add to span
 	// TODO SUM ALL metadata
 	//if i.scanMetadata != nil {
@@ -123,17 +125,7 @@ func (i *baseScanIterator) closeSpan() {
 	i.traceCtx.Span.End()
 }
 
-func (i *baseScanIterator) Start(stream proto.WrapperPlugin_ExecuteClient, ctx context.Context, cancel context.CancelFunc) {
-	logging.LogTime("[hub] start")
-	i.status = QueryStatusStarted
-	i.pluginRowStream = stream
-	i.cancel = cancel
-
-	// read the results - this will loop until it hits an error or the stream is closed
-	go i.readThread(ctx)
-}
-
-func (i *baseScanIterator) Close() {
+func (i *scanIteratorBase) Close() {
 	// call the context cancellation function
 	i.cancel()
 
@@ -147,7 +139,7 @@ func (i *baseScanIterator) Close() {
 }
 
 // CanIterate returns true if this iterator has results available to iterate
-func (i *baseScanIterator) CanIterate() bool {
+func (i *scanIteratorBase) CanIterate() bool {
 	switch i.status {
 	case QueryStatusError, QueryStatusReady, QueryStatusComplete:
 		// scan iterator must be explicitly started - so we cannot iterate is in ready state
@@ -158,7 +150,7 @@ func (i *baseScanIterator) CanIterate() bool {
 
 }
 
-func (i *baseScanIterator) GetScanMetadata() []ScanMetadata {
+func (i *scanIteratorBase) GetScanMetadata() []ScanMetadata {
 	res := make([]ScanMetadata, len(i.scanMetadata))
 	idx := 0
 	for _, m := range i.scanMetadata {
@@ -177,11 +169,76 @@ func (i *baseScanIterator) GetScanMetadata() []ScanMetadata {
 	return res
 }
 
-func (i *baseScanIterator) GetTraceContext() *telemetry.TraceCtx {
+func (i *scanIteratorBase) GetTraceContext() *telemetry.TraceCtx {
 	return i.traceCtx
 }
 
-func (i *baseScanIterator) populateRow(row *proto.Row) (map[string]interface{}, error) {
+func (i *scanIteratorBase) GetQueryContext() *proto.QueryContext {
+	return i.queryContext
+}
+
+func (i *scanIteratorBase) GetCallId() string {
+	return i.callId
+}
+
+func (i *scanIteratorBase) GetConnectionLimitMap() map[string]int64 {
+	return i.connectionLimitMap
+}
+
+func (i *scanIteratorBase) SetError(err error) {
+	i.err = err
+}
+
+func (i *scanIteratorBase) GetTable() string {
+	return i.table
+}
+
+func (i *scanIteratorBase) Start(executor pluginExecutor) error {
+	req := i.newExecuteRequest()
+
+	// create context anc cancel function
+
+	stream, ctx, cancel, err := executor.execute(req)
+	if err != nil {
+		return err
+	}
+
+	logging.LogTime("[hub] start")
+	i.status = QueryStatusStarted
+	i.pluginRowStream = stream
+	i.cancel = cancel
+
+	// read the results - this will loop until it hits an error or the stream is closed
+	go i.readThread(ctx)
+	return nil
+}
+
+func (i *scanIteratorBase) newExecuteRequest() *proto.ExecuteRequest {
+	req := &proto.ExecuteRequest{
+		Table:        i.table,
+		QueryContext: i.queryContext,
+		CallId:       i.callId,
+		// pass connection name - used for aggregators
+		Connection:            i.connectionName,
+		TraceContext:          grpc.CreateCarrierFromContext(i.traceCtx.Ctx),
+		ExecuteConnectionData: make(map[string]*proto.ExecuteConnectionData),
+	}
+
+	log.Printf("[INFO] build executeConnectionData map")
+	// build executeConnectionData map
+	for connectionName, limit := range i.connectionLimitMap {
+		data := &proto.ExecuteConnectionData{}
+		if limit != -1 {
+			data.Limit = &proto.NullableInt{Value: limit}
+		}
+		data.CacheTtl = int64(i.hub.cacheTTL(connectionName).Seconds())
+		data.CacheEnabled = i.hub.cacheEnabled(connectionName)
+
+		req.ExecuteConnectionData[connectionName] = data
+	}
+	return req
+}
+func (i *scanIteratorBase) populateRow(row *proto.Row) (map[string]interface{}, error) {
 	res := make(map[string]interface{}, len(row.Columns))
 	for columnName, column := range row.Columns {
 		// extract column value as interface from protobuf message
@@ -216,7 +273,7 @@ func (i *baseScanIterator) populateRow(row *proto.Row) (map[string]interface{}, 
 // - the stream is complete
 // - there stream returns an error
 // there is a signal on the cancel channel
-func (i *baseScanIterator) readThread(ctx context.Context) {
+func (i *scanIteratorBase) readThread(ctx context.Context) {
 	// if the iterator is not in a started state, skip
 	// (this can happen if postgres cancels the scan before receiving any results)
 	if i.status == QueryStatusStarted {
@@ -229,7 +286,7 @@ func (i *baseScanIterator) readThread(ctx context.Context) {
 	close(i.rows)
 }
 
-func (i *baseScanIterator) readPluginResult(ctx context.Context) bool {
+func (i *scanIteratorBase) readPluginResult(ctx context.Context) bool {
 	continueReading := true
 	var rcvChan = make(chan *proto.ExecuteResponse)
 	var errChan = make(chan error)
@@ -281,7 +338,7 @@ func (i *baseScanIterator) readPluginResult(ctx context.Context) bool {
 }
 
 // if there is an error other than EOF, save error and set state to QueryStatusError
-func (i *baseScanIterator) setError(err error) {
+func (i *scanIteratorBase) setError(err error) {
 	if err != nil && err.Error() != "EOF" {
 		i.status = QueryStatusError
 		i.err = err
