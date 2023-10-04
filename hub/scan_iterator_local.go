@@ -11,7 +11,6 @@ import (
 type scanIteratorLocal struct {
 	scanIteratorBase
 	pluginName string
-	hub        *HubLocal
 }
 
 func newScanIteratorLocal(hub Hub, connectionName, table, pluginName string, connectionLimitMap map[string]int64, qualMap map[string]*proto.Quals, columns []string, limit int64, traceCtx *telemetry.TraceCtx) *scanIteratorLocal {
@@ -32,8 +31,9 @@ func (i *scanIteratorLocal) execute(req *proto.ExecuteRequest) (row_stream.Recei
 	// create a local stream
 	stream := newLocalStream(ctx)
 
+	plugin := i.hub.(*HubLocal).plugin
 	log.Printf("[INFO] StartScan for table: %s, cache enabled: %v, iterator %p, %d quals (%s)", i.table, req.CacheEnabled, i, len(i.queryContext.Quals), i.callId)
-	err := i.hub.plugin.CallExecute(req, stream)
+	err := plugin.CallExecute(req, stream)
 	if err != nil {
 		return nil, nil, nil, err
 	}

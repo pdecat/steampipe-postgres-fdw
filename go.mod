@@ -2,6 +2,8 @@ module github.com/turbot/steampipe-postgres-fdw
 
 go 1.21
 
+replace github.com/turbot/steampipe-plugin-sdk/v5 => /Users/kai/Dev/github/turbot/steampipe-plugin-sdk
+
 require (
 	github.com/dgraph-io/ristretto v0.1.1 // indirect
 	github.com/golang/protobuf v1.5.3
