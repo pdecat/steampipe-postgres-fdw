@@ -9,6 +9,14 @@ install: build
 		cp ./build-$(PLATFORM)/steampipe_postgres_fdw.so ~/.steampipe/db/14.2.0/postgres/lib/postgresql/; \
 	fi
 
+standalone: build
+	if test -d ~/.steampipe/db/14.2.0; then \
+		cp ./build-$(PLATFORM)/steampipe_postgres_fdw--1.0.sql ~/.steampipe/db/14.2.0/postgres/share/postgresql/extension/steampipe_postgres_fdw_aws--1.0.sql; \
+		cp ./build-$(PLATFORM)/steampipe_postgres_fdw.control ~/.steampipe/db/14.2.0/postgres/share/postgresql/extension/steampipe_postgres_fdw_aws.control; \
+		cp ./build-$(PLATFORM)/steampipe_postgres_fdw.so ~/.steampipe/db/14.2.0/postgres/lib/postgresql/steampipe_postgres_fdw.so; \
+	fi
+
+
 build: prebuild.go
 	$(MAKE) -C ./fdw clean
 	$(MAKE) -C ./fdw go
@@ -43,3 +51,4 @@ clean:
 # Usage: make release input="v1.7.2"
 release:
 	./scripts/upload_arm_asset.sh $(input)
+

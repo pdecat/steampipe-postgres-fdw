@@ -14,6 +14,7 @@ import (
 	"github.com/turbot/steampipe/pkg/steampipeconfig/modconfig"
 	"golang.org/x/exp/maps"
 	"log"
+	"strings"
 )
 
 type HubLocal struct {
@@ -22,25 +23,6 @@ type HubLocal struct {
 	pluginName  string
 	pluginAlias string
 	connections map[string]*proto.ConnectionConfig
-}
-
-func (l *HubLocal) SetConnectionConfig(connections map[string]string) error {
-	l.connections = make(map[string]*proto.ConnectionConfig, len(connections))
-
-	for connectionName, configString := range connections {
-		l.connections[connectionName] =
-			&proto.ConnectionConfig{
-				Connection:      connectionName,
-				Plugin:          l.pluginName,
-				PluginShortName: l.pluginAlias,
-				Config:          configString,
-				PluginInstance:  l.pluginName,
-			}
-	}
-	_, err := l.plugin.SetAllConnectionConfigs(&proto.SetAllConnectionConfigsRequest{
-		Configs: maps.Values(l.connections),
-	})
-	return err
 }
 
 func newLocalHub(connections map[string]string) (*HubLocal, error) {
@@ -66,6 +48,27 @@ func newLocalHub(connections map[string]string) (*HubLocal, error) {
 	}
 
 	return hub, nil
+}
+
+func (l *HubLocal) SetConnectionConfig(connections map[string]string) error {
+	l.connections = make(map[string]*proto.ConnectionConfig, len(connections))
+
+	log.Printf("[INFO] HubLocal SetConnectionConfig: connections: %s", strings.Join(maps.Keys(connections), ","))
+
+	for connectionName, configString := range connections {
+		l.connections[connectionName] =
+			&proto.ConnectionConfig{
+				Connection:      connectionName,
+				Plugin:          l.pluginName,
+				PluginShortName: l.pluginAlias,
+				Config:          configString,
+				PluginInstance:  l.pluginName,
+			}
+	}
+	_, err := l.plugin.SetAllConnectionConfigs(&proto.SetAllConnectionConfigsRequest{
+		Configs: maps.Values(l.connections),
+	})
+	return err
 }
 
 func (l *HubLocal) LoadConnectionConfig() (bool, error) {
