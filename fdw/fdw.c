@@ -31,7 +31,7 @@ FdwExecState *initializeExecState(void *internalstate);
 PG_MODULE_MAGIC;
 
 // Define our handling functions with Postgres, following the V1 protocol.
-PG_FUNCTION_INFO_V1(fdw_handler);
+PG_FUNCTION_INFO_V1(steampipe_aws_fdw_handler);
 PG_FUNCTION_INFO_V1(fdw_validator);
 
 
@@ -72,7 +72,7 @@ exitHook(int code, Datum arg)
 	goFdwShutdown();
 }
 
-Datum fdw_handler(PG_FUNCTION_ARGS) {
+Datum steampipe_aws_fdw_handler(PG_FUNCTION_ARGS) {
   FdwRoutine *fdw_routine = makeNode(FdwRoutine);
   fdw_routine->GetForeignRelSize = fdwGetForeignRelSize;
   fdw_routine->GetForeignPaths = fdwGetForeignPaths;

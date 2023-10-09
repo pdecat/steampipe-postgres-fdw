@@ -3,8 +3,8 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION fdw" to load this extension. \quit
 
-CREATE FUNCTION fdw_handler()
-RETURNS fdw_handler
+CREATE FUNCTION steampipe_aws_fdw_handler()
+RETURNS steampipe_aws_fdw_handler
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
@@ -14,7 +14,7 @@ AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
 CREATE FOREIGN DATA WRAPPER steampipe_postgres_fdw
-  HANDLER fdw_handler
+  HANDLER steampipe_aws_fdw_handler
   VALIDATOR fdw_validator;
 
 -- CREATE SERVER "steampipe"
