@@ -4,7 +4,7 @@
 \echo Use "CREATE EXTENSION fdw" to load this extension. \quit
 
 CREATE FUNCTION steampipe_aws_fdw_handler()
-RETURNS steampipe_aws_fdw_handler
+RETURNS fdw_handler
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
@@ -13,9 +13,6 @@ RETURNS void
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
-CREATE FOREIGN DATA WRAPPER steampipe_postgres_fdw
+CREATE FOREIGN DATA WRAPPER steampipe_postgres_fdw_aws
   HANDLER steampipe_aws_fdw_handler
   VALIDATOR steampipe_aws_fdw_validator;
-
--- CREATE SERVER "steampipe"
---     FOREIGN DATA WRAPPER steampipe_postgres_fdw;
