@@ -8,14 +8,14 @@ RETURNS steampipe_aws_fdw_handler
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
-CREATE FUNCTION fdw_validator(text[], oid)
+CREATE FUNCTION steampipe_aws_fdw_validator(text[], oid)
 RETURNS void
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
 CREATE FOREIGN DATA WRAPPER steampipe_postgres_fdw
   HANDLER steampipe_aws_fdw_handler
-  VALIDATOR fdw_validator;
+  VALIDATOR steampipe_aws_fdw_validator;
 
 -- CREATE SERVER "steampipe"
 --     FOREIGN DATA WRAPPER steampipe_postgres_fdw;
