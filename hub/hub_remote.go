@@ -18,6 +18,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"time"
 )
 
 const (
@@ -275,4 +276,42 @@ func (h *RemoteHub) clearConnectionCache(connection string) error {
 	}
 	log.Printf("[INFO] clear connection cache succeeded")
 	return err
+}
+
+func (h *RemoteHub) cacheEnabled(connectionName string) bool {
+	if h.cacheSettings.Enabled != nil {
+		return *h.cacheSettings.Enabled
+	}
+	// ask the steampipe config for resolved plugin options - this will use default values where needed
+	connectionOptions := steampipeconfig.GlobalConfig.GetConnectionOptions(connectionName)
+
+	// the config loading code should ALWAYS populate the connection options, using defaults if needed
+	if connectionOptions.Cache == nil {
+		panic(fmt.Sprintf("No cache options found for connection %s", connectionName))
+	}
+	return *connectionOptions.Cache
+}
+
+func (h *RemoteHub) cacheTTL(connectionName string) time.Duration {
+	// if the cache ttl has been overridden, then enforce the value
+	if h.cacheSettings.Ttl != nil {
+		return *h.cacheSettings.Ttl
+	}
+
+	// ask the steampipe config for resolved plugin options - this will use default values where needed
+	connectionOptions := steampipeconfig.GlobalConfig.GetConnectionOptions(connectionName)
+
+	// the config loading code should ALWAYS populate the connection options, using defaults if needed
+	if connectionOptions.CacheTTL == nil {
+		panic(fmt.Sprintf("No cache options found for connection %s", connectionName))
+	}
+
+	ttl := time.Duration(*connectionOptions.CacheTTL) * time.Second
+
+	// would this give data earlier than the cacheClearTime
+	now := time.Now()
+	if now.Add(-ttl).Before(h.cacheSettings.ClearTime) {
+		ttl = now.Sub(h.cacheSettings.ClearTime)
+	}
+	return ttl
 }

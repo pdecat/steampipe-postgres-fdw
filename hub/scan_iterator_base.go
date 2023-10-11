@@ -224,7 +224,7 @@ func (i *scanIteratorBase) newExecuteRequest() *proto.ExecuteRequest {
 		ExecuteConnectionData: make(map[string]*proto.ExecuteConnectionData),
 	}
 
-	log.Printf("[INFO] build executeConnectionData map")
+	log.Printf("[INFO] build executeConnectionData map: hub: %p, i.connectionLimitMap: %v", i.hub, i.connectionLimitMap)
 	// build executeConnectionData map
 	for connectionName, limit := range i.connectionLimitMap {
 		data := &proto.ExecuteConnectionData{}
@@ -233,9 +233,11 @@ func (i *scanIteratorBase) newExecuteRequest() *proto.ExecuteRequest {
 		}
 		data.CacheTtl = int64(i.hub.cacheTTL(connectionName).Seconds())
 		data.CacheEnabled = i.hub.cacheEnabled(connectionName)
-
 		req.ExecuteConnectionData[connectionName] = data
+
 	}
+	log.Printf("[INFO] build executeConnectionData map returning %v", req)
+
 	return req
 }
 func (i *scanIteratorBase) populateRow(row *proto.Row) (map[string]interface{}, error) {

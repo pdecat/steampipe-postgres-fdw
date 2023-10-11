@@ -314,44 +314,6 @@ func (h *hubBase) ValidateCacheCommand(command string) error {
 	return nil
 }
 
-func (h *hubBase) cacheEnabled(connectionName string) bool {
-	if h.cacheSettings.Enabled != nil {
-		return *h.cacheSettings.Enabled
-	}
-	// ask the steampipe config for resolved plugin options - this will use default values where needed
-	connectionOptions := steampipeconfig.GlobalConfig.GetConnectionOptions(connectionName)
-
-	// the config loading code should ALWAYS populate the connection options, using defaults if needed
-	if connectionOptions.Cache == nil {
-		panic(fmt.Sprintf("No cache options found for connection %s", connectionName))
-	}
-	return *connectionOptions.Cache
-}
-
-func (h *hubBase) cacheTTL(connectionName string) time.Duration {
-	// if the cache ttl has been overridden, then enforce the value
-	if h.cacheSettings.Ttl != nil {
-		return *h.cacheSettings.Ttl
-	}
-
-	// ask the steampipe config for resolved plugin options - this will use default values where needed
-	connectionOptions := steampipeconfig.GlobalConfig.GetConnectionOptions(connectionName)
-
-	// the config loading code should ALWAYS populate the connection options, using defaults if needed
-	if connectionOptions.CacheTTL == nil {
-		panic(fmt.Sprintf("No cache options found for connection %s", connectionName))
-	}
-
-	ttl := time.Duration(*connectionOptions.CacheTTL) * time.Second
-
-	// would this give data earlier than the cacheClearTime
-	now := time.Now()
-	if now.Add(-ttl).Before(h.cacheSettings.ClearTime) {
-		ttl = now.Sub(h.cacheSettings.ClearTime)
-	}
-	return ttl
-}
-
 func (h *hubBase) executeCommandScan(connectionName, table string) (Iterator, error) {
 	switch table {
 	case constants.ForeignTableScanMetadata, constants.LegacyCommandTableScanMetadata:
@@ -502,4 +464,47 @@ func (h *hubBase) HandleLegacyCacheCommand(command string) error {
 		h.cacheSettings.Apply(string(settings.SettingKeyCacheClearTimeOverride), "false")
 	}
 	return nil
+}
+
+func (h *hubBase) cacheEnabled(connectionName string) bool {
+	if h.cacheSettings.Enabled != nil {
+		return *h.cacheSettings.Enabled
+	}
+	// ask the steampipe config for resolved plugin options - this will use default values where needed
+	connectionOptions := steampipeconfig.GlobalConfig.GetConnectionOptions(connectionName)
+
+	// the config loading code should ALWAYS populate the connection options, using defaults if needed
+	if connectionOptions.Cache == nil {
+		panic(fmt.Sprintf("No cache options found for connection %s", connectionName))
+	}
+	return *connectionOptions.Cache
+}
+
+func (h *hubBase) cacheTTL(connectionName string) time.Duration {
+	log.Printf("[INFO] cacheTTL 1")
+	// if the cache ttl has been overridden, then enforce the value
+	if h.cacheSettings.Ttl != nil {
+		return *h.cacheSettings.Ttl
+	}
+	log.Printf("[INFO] cacheTTL 2")
+
+	// ask the steampipe config for resolved plugin options - this will use default values where needed
+	connectionOptions := steampipeconfig.GlobalConfig.GetConnectionOptions(connectionName)
+	log.Printf("[INFO] cacheTTL 3")
+
+	// the config loading code should ALWAYS populate the connection options, using defaults if needed
+	if connectionOptions.CacheTTL == nil {
+		panic(fmt.Sprintf("No cache options found for connection %s", connectionName))
+	}
+	log.Printf("[INFO] cacheTTL 4")
+
+	ttl := time.Duration(*connectionOptions.CacheTTL) * time.Second
+
+	// would this give data earlier than the cacheClearTime
+	now := time.Now()
+	if now.Add(-ttl).Before(h.cacheSettings.ClearTime) {
+		ttl = now.Sub(h.cacheSettings.ClearTime)
+	}
+	log.Printf("[INFO] cacheTTL 5")
+	return ttl
 }

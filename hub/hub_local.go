@@ -15,6 +15,7 @@ import (
 	"golang.org/x/exp/maps"
 	"log"
 	"strings"
+	"time"
 )
 
 type HubLocal struct {
@@ -190,8 +191,7 @@ func (l *HubLocal) buildConnectionLimitMap(connection, table string, qualMap map
 	}
 	connectionLimitMap[connection] = connectionLimit
 
-	//return ConnectionLimitMap, nil
-	return make(map[string]int64), nil
+	return connectionLimitMap, nil
 }
 
 func (l *HubLocal) clearConnectionCache(connection string) error {
@@ -202,4 +202,21 @@ func (l *HubLocal) clearConnectionCache(connection string) error {
 	}
 	log.Printf("[INFO] clear connection cache succeeded")
 	return err
+}
+
+func (h *HubLocal) cacheEnabled(string) bool {
+	if h.cacheSettings.Enabled != nil {
+		return *h.cacheSettings.Enabled
+	}
+	return true
+}
+
+func (h *HubLocal) cacheTTL(string) time.Duration {
+	log.Printf("[INFO] cacheTTL 1")
+	// if the cache ttl has been overridden, then enforce the value
+	if h.cacheSettings.Ttl != nil {
+		return *h.cacheSettings.Ttl
+	}
+	// TODO CHECK
+	return 10 * time.Hour
 }
