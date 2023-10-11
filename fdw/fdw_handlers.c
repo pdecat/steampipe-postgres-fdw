@@ -2,7 +2,9 @@
 // defined and available.
 #include "steampipe_postgres_fdw.h"
 
-// NOTE: this will be replaced by a r
+
 // Define our handling functions with Postgres, following the V1 protocol.
-PG_FUNCTION_INFO_V1(steampipe_aws_fdw_handler);
-PG_FUNCTION_INFO_V1(steampipe_aws_fdw_validator);
+//PG_FUNCTION_INFO_V1(steampipe_aws_fdw_handler);
+//PG_FUNCTION_INFO_V1(steampipe_aws_fdw_validator);
+PG_FUNCTION_INFO_V1(steampipe_fdw_handler);
+PG_FUNCTION_INFO_V1(steampipe_fdw_validator);

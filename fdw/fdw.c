@@ -68,7 +68,8 @@ exitHook(int code, Datum arg)
 	goFdwShutdown();
 }
 
-Datum steampipe_aws_fdw_handler(PG_FUNCTION_ARGS) {
+//Datum steampipe_aws_fdw_handler(PG_FUNCTION_ARGS) {
+Datum steampipe_fdw_handler(PG_FUNCTION_ARGS) {
   FdwRoutine *fdw_routine = makeNode(FdwRoutine);
   fdw_routine->GetForeignRelSize = fdwGetForeignRelSize;
   fdw_routine->GetForeignPaths = fdwGetForeignPaths;
@@ -86,7 +87,8 @@ PG_RETURN_POINTER(fdw_routine);
 
 // TODO - Use this to validate the arguments passed to the FDW
 // https://github.com/laurenz/oracle_fdw/blob/9d7b5c331b0c8851c71f410f77b41c1a83c89ece/oracle_fdw.c#L420
-Datum steampipe_aws_fdw_validator(PG_FUNCTION_ARGS) {
+//Datum steampipe_aws_fdw_validator(PG_FUNCTION_ARGS) {
+Datum steampipe_fdw_validator(PG_FUNCTION_ARGS) {
   Oid catalog = PG_GETARG_OID(1);
   List *options_list = untransformRelOptions(PG_GETARG_DATUM(0));
   goFdwValidate(catalog, options_list);

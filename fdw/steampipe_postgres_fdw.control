@@ -1,5 +1,7 @@
 # fdw extension
-comment = 'Steampipe AWS Foreign Data Wrapper'
+#comment = 'Steampipe AWS Foreign Data Wrapper'
+comment = 'Steampipe Foreign Data Wrapper'
 default_version = '1.0'
-module_pathname = '$libdir/steampipe_postgres_fdw_aws.so'
+# module_pathname = '$libdir/steampipe_postgres_fdw_aws.so'
+module_pathname = '$libdir/steampipe_postgres_fdw.so'
 relocatable = true

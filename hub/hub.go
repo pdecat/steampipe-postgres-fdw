@@ -52,9 +52,10 @@ func GetHub() (Hub, error) {
 		// TODO configure build to select between local and remote hub
 		// TODO get connection config from import foreign schema options
 
-		hubSingleton, err = newLocalHub(map[string]string{
-			"aws": "",
-		})
+		//hubSingleton, err = newLocalHub(map[string]string{
+		//	"aws": "",
+		//})
+		hubSingleton, err = newRemoteHub()
 		if err != nil {
 			return nil, err
 		}
