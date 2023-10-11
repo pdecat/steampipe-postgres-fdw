@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
+	"log"
 )
 
 const localPluginStreamBuffer = 1024
@@ -19,12 +20,14 @@ func newLocalStream(ctx context.Context) *localPluginStream {
 	}
 }
 func (s *localPluginStream) Send(r *proto.ExecuteResponse) error {
+	log.Printf("[WARN] localPluginStream Send")
 	s.rows <- r
 	return nil
 }
 
 func (s *localPluginStream) Recv() (*proto.ExecuteResponse, error) {
 	resp := <-s.rows
+	log.Printf("[WARN] localPluginStream Recv %v", resp)
 	return resp, nil
 }
 
