@@ -1,7 +1,6 @@
 package hub
 
 import (
-	"github.com/turbot/steampipe-plugin-aws/aws"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
 	"github.com/turbot/steampipe-plugin-sdk/v5/logging"
@@ -33,7 +32,7 @@ func newLocalHub(connections map[string]string) (*HubLocal, error) {
 	// TODO dynamically control the plugin func at build time
 	hub := &HubLocal{
 		plugin: plugin.NewPluginServer(&plugin.ServeOpts{
-			PluginFunc: aws.Plugin,
+			PluginFunc: getPluginFunc(),
 		}),
 		pluginName:  imageRef,
 		pluginAlias: pluginAlias,

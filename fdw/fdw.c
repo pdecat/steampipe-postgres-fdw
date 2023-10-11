@@ -30,10 +30,6 @@ FdwExecState *initializeExecState(void *internalstate);
 // such as being compiled against the correct major version.
 PG_MODULE_MAGIC;
 
-// Define our handling functions with Postgres, following the V1 protocol.
-PG_FUNCTION_INFO_V1(steampipe_aws_fdw_handler);
-PG_FUNCTION_INFO_V1(steampipe_aws_fdw_validator);
-
 
 /*
  * _PG_init
