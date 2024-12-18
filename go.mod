@@ -1,6 +1,8 @@
 module github.com/turbot/steampipe-postgres-fdw
 
-go 1.22.4
+go 1.23.1
+
+toolchain go1.23.4
 
 require (
 	github.com/dgraph-io/ristretto v0.1.1 // indirect
@@ -219,3 +221,5 @@ replace (
 	github.com/vartanbeno/go-reddit/v2 => github.com/abhiturbot/go-reddit/v2 v2.0.0-20220917030010-f0fe7d8ac15c
 	oras.land/oras-go => oras.land/oras-go v1.1.0
 )
+
+replace github.com/turbot/pipe-fittings => github.com/pdecat/pipe-fittings v1.6.7-0.20241218132306-db23721a1bb8
