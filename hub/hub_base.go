@@ -379,11 +379,22 @@ func (h *hubBase) traceContextForScan(table string, columns []string, limit int6
 
 	// Check if we have trace context from session variables
 	if traceContextStr, exists := opts["trace_context"]; exists && traceContextStr != "" {
+		log.Printf("[ERROR] DIAGNOSTIC: traceContextForScan received trace context: %s", traceContextStr)
 		log.Printf("[DEBUG] traceContextForScan received trace context: %s", traceContextStr)
+		log.Printf("[ERROR] DIAGNOSTIC: About to call parseTraceContext")
 		if parentCtx := h.parseTraceContext(traceContextStr); parentCtx != nil {
+			log.Printf("[ERROR] DIAGNOSTIC: parseTraceContext returned valid context")
 			baseCtx = parentCtx
 			log.Printf("[TRACE] Using parent trace context for scan of table: %s", table)
+
+			// DIAGNOSTIC: Verify the parent context has the expected trace ID
+			parentSpanCtx := trace.SpanContextFromContext(parentCtx)
+			if parentSpanCtx.IsValid() {
+				log.Printf("[DEBUG] Parent context TraceID: %s, SpanID: %s",
+					parentSpanCtx.TraceID().String(), parentSpanCtx.SpanID().String())
+			}
 		} else {
+			log.Printf("[ERROR] DIAGNOSTIC: parseTraceContext returned nil")
 			log.Printf("[WARN] Failed to parse trace context for table: %s", table)
 		}
 	} else {
@@ -415,6 +426,7 @@ func (h *hubBase) traceContextForScan(table string, columns []string, limit int6
 // parseTraceContext parses trace context string from session variables
 // Format: "traceparent=00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01;tracestate=rojo=00f067aa0ba902b7"
 func (h *hubBase) parseTraceContext(traceContextString string) context.Context {
+	log.Printf("[ERROR] DIAGNOSTIC: parseTraceContext called with: %s", traceContextString)
 	log.Printf("[DEBUG] parseTraceContext called with: %s", traceContextString)
 
 	if traceContextString == "" {
