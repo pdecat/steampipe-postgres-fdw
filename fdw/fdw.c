@@ -97,11 +97,19 @@ void exitHook(int code, Datum arg)
 }
 
 static bool fdwIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte) {
+  // DEBUG: Always log when this function is called
+  elog(DEBUG1, "fdwIsForeignScanParallelSafe called - checking environment variable");
+
   const char *parallel_safe_env = getenv("STEAMPIPE_FDW_PARALLEL_SAFE");
   bool parallel_safe = parallel_safe_env != NULL;
+
   if (parallel_safe) {
     elog(DEBUG1, "STEAMPIPE_FDW_PARALLEL_SAFE is set: %s", parallel_safe_env);
+  } else {
+    elog(DEBUG1, "STEAMPIPE_FDW_PARALLEL_SAFE is NOT set - parallel execution will be disabled");
   }
+
+  elog(DEBUG1, "fdwIsForeignScanParallelSafe returning: %s", parallel_safe ? "true" : "false");
 	return parallel_safe;
 }
 
@@ -276,6 +284,9 @@ static void fdwGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid for
   // to set the log level for fdw logging from C code, set log_min_messages in postgresql.conf
   goInit();
 
+  // DEBUG: Log that GetForeignRelSize is being called
+  elog(DEBUG1, "fdwGetForeignRelSize called - checking if parallel safety callback will be invoked");
+
   planstate = palloc0(sizeof(FdwPlanState));
   ftable = GetForeignTable(foreigntableid);
 
@@ -405,6 +416,9 @@ static void fdwGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid forei
   ListCell *lc;
   FdwPathData *fdw_private;
   FdwPlanState *planstate = baserel->fdw_private;
+
+  // DEBUG: Log that GetForeignPaths is being called - this is where parallel paths are typically considered
+  elog(DEBUG1, "fdwGetForeignPaths called - parallel execution may be evaluated here");
 
   /* These lists are used to handle sort pushdown */
   List *apply_pathkeys = NULL;
