@@ -97,7 +97,12 @@ void exitHook(int code, Datum arg)
 }
 
 static bool fdwIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte) {
-	return getenv("STEAMPIPE_FDW_PARALLEL_SAFE") != NULL;
+  const char *parallel_safe_env = getenv("STEAMPIPE_FDW_PARALLEL_SAFE");
+  bool parallel_safe = parallel_safe_env != NULL;
+  if (parallel_safe) {
+    elog(DEBUG1, "STEAMPIPE_FDW_PARALLEL_SAFE is set: %s", parallel_safe_env);
+  }
+	return parallel_safe;
 }
 
 /*
