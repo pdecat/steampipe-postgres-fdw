@@ -44,6 +44,12 @@ Expr *fdw_get_em_expr(EquivalenceClass *ec, RelOptInfo *rel);
 /* DEBUG: Safe wrapper for pull_var_clause to catch PostgreSQL v16+ compatibility issues */
 List *safe_pull_var_clause(Node *node, int flags, const char *context);
 
+/* PostgreSQL v16+ compatibility: Custom expression walker for RestrictInfo nodes */
+#if PG_VERSION_NUM >= 160000
+static bool fdw_expression_tree_walker(Node *node, bool (*walker)(), void *context);
+static List *fdw_pull_var_clause(Node *node, int flags);
+#endif
+
 /*
  * The list of needed columns (represented by their respective vars)
  * is pulled from:
@@ -93,6 +99,20 @@ extractColumns(List *reltargetlist, List *restrictinfolist)
         elog(DEBUG2, "extractColumns: RestrictInfo clause nodeToString: %s", nodeToString((Node *)node->clause));
     }
     
+    /* PostgreSQL v16+ compatibility: Handle RestrictInfo nodes properly */
+#if PG_VERSION_NUM >= 160000
+    /* In PostgreSQL v16+, handle RestrictInfo clause extraction more carefully */
+    elog(DEBUG1, "extractColumns: PostgreSQL v16+ path - using fdw_pull_var_clause for RestrictInfo handling");
+    if (node && node->clause) {
+      targetcolumns = fdw_pull_var_clause((Node *)node->clause,
+                                      PVC_RECURSE_AGGREGATES |
+                                          PVC_RECURSE_PLACEHOLDERS);
+    } else {
+      elog(DEBUG1, "extractColumns: NULL RestrictInfo node or clause for PostgreSQL v16+");
+      targetcolumns = NIL;
+    }
+#else
+    /* For PostgreSQL v15 and earlier, use the original approach */
     targetcolumns = safe_pull_var_clause((Node *)node->clause,
 #if PG_VERSION_NUM >= 90600
                                     PVC_RECURSE_AGGREGATES |
@@ -101,7 +121,9 @@ extractColumns(List *reltargetlist, List *restrictinfolist)
                                     PVC_RECURSE_AGGREGATES,
                                     PVC_RECURSE_PLACEHOLDERS,
 #endif
-                                    "extractColumns");
+                                    "extractColumns_legacy");
+#endif
+    
     columns = list_union(columns, targetcolumns);
   }
   return columns;
@@ -372,7 +394,24 @@ bool isAttrInRestrictInfo(Index relid, AttrNumber attno, RestrictInfo *restricti
            nodeToString((Node *)restrictinfo->clause));
   }
   
-  List *vars = safe_pull_var_clause((Node *)restrictinfo->clause,
+  List *vars;
+  
+  /* PostgreSQL v16+ compatibility: Handle RestrictInfo nodes properly */
+#if PG_VERSION_NUM >= 160000
+  /* In PostgreSQL v16+, we need to handle RestrictInfo nodes differently
+   * Use our custom fdw_pull_var_clause that properly handles RestrictInfo nodes */
+  elog(DEBUG1, "isAttrInRestrictInfo: PostgreSQL v16+ path - using fdw_pull_var_clause for RestrictInfo handling");
+  if (restrictinfo && restrictinfo->clause) {
+    vars = fdw_pull_var_clause((Node *)restrictinfo->clause,
+                               PVC_RECURSE_AGGREGATES |
+                                   PVC_RECURSE_PLACEHOLDERS);
+  } else {
+    elog(DEBUG1, "isAttrInRestrictInfo: NULL restrictinfo or clause for PostgreSQL v16+");
+    return false;
+  }
+#else
+  /* For PostgreSQL v15 and earlier, use the original approach */
+  vars = safe_pull_var_clause((Node *)restrictinfo->clause,
 #if PG_VERSION_NUM >= 90600
                                PVC_RECURSE_AGGREGATES |
                                    PVC_RECURSE_PLACEHOLDERS,
@@ -380,7 +419,9 @@ bool isAttrInRestrictInfo(Index relid, AttrNumber attno, RestrictInfo *restricti
                                PVC_RECURSE_AGGREGATES,
                                PVC_RECURSE_PLACEHOLDERS,
 #endif
-                               "isAttrInRestrictInfo");
+                               "isAttrInRestrictInfo_legacy");
+#endif
+  
   ListCell *lc;
 
   foreach (lc, vars)
@@ -715,6 +756,69 @@ serializeDeparsedSortGroup(List *pathkeys)
 
   return result;
 }
+
+#if PG_VERSION_NUM >= 160000
+/*
+* PostgreSQL v16+ compatibility: Custom expression tree walker that handles RestrictInfo nodes
+* This is needed because PostgreSQL v16+ changed how RestrictInfo nodes are processed
+*/
+static bool fdw_expression_tree_walker(Node *node, bool (*walker)(), void *context)
+{
+  if (node == NULL)
+      return false;
+
+  /* Handle RestrictInfo nodes specifically for PostgreSQL v16+ */
+  if (IsA(node, RestrictInfo))
+  {
+      RestrictInfo *restrictinfo = (RestrictInfo *) node;
+      elog(DEBUG2, "fdw_expression_tree_walker: Processing RestrictInfo node, walking clause");
+      
+      /* Walk the clause inside the RestrictInfo */
+      if (restrictinfo->clause)
+          return walker((Node *) restrictinfo->clause, context);
+      else
+          return false;
+  }
+
+  /* For all other node types, use the standard expression_tree_walker */
+  return expression_tree_walker(node, walker, context);
+}
+
+/*
+* PostgreSQL v16+ compatibility: Custom pull_var_clause that uses our custom walker
+*/
+static List *fdw_pull_var_clause(Node *node, int flags)
+{
+  List *result = NIL;
+  
+  if (node == NULL)
+      return NIL;
+      
+  elog(DEBUG2, "fdw_pull_var_clause: Processing node type %d (%s)",
+       (int)nodeTag(node), tagTypeToString(nodeTag(node)));
+
+  /* Handle RestrictInfo nodes by extracting their clause */
+  if (IsA(node, RestrictInfo))
+  {
+      RestrictInfo *restrictinfo = (RestrictInfo *) node;
+      elog(DEBUG1, "fdw_pull_var_clause: Found RestrictInfo node, extracting clause");
+      
+      if (restrictinfo->clause)
+      {
+          /* Recursively process the clause inside the RestrictInfo */
+          return pull_var_clause((Node *) restrictinfo->clause, flags);
+      }
+      else
+      {
+          elog(DEBUG1, "fdw_pull_var_clause: RestrictInfo has NULL clause");
+          return NIL;
+      }
+  }
+
+  /* For all other node types, use the standard pull_var_clause */
+  return pull_var_clause(node, flags);
+}
+#endif
 
 /* DEBUG: Safe wrapper for pull_var_clause to catch PostgreSQL v16+ compatibility issues */
 List *safe_pull_var_clause(Node *node, int flags, const char *context)
