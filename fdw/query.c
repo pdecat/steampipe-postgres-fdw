@@ -528,6 +528,9 @@ findPaths(PlannerInfo *root, RelOptInfo *baserel, List *possiblePaths,
             NULL, /* default pathtarget */
 #endif
             nbrows,
+#if PG_VERSION_NUM >= 180000
+            0,
+#endif
             startupCost,
 #if PG_VERSION_NUM >= 90600
             nbrows * baserel->reltarget->width,
