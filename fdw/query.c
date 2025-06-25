@@ -49,6 +49,8 @@ List *safe_pull_var_clause(Node *node, int flags, const char *context);
 #if PG_VERSION_NUM >= 160000
 static bool fdw_expression_tree_walker(Node *node, bool (*walker)(), void *context);
 static List *fdw_pull_var_clause(Node *node, int flags);
+static List *fdw_pull_var_clause_internal(Node *node, int flags, int depth, List *visited_nodes);
+#define MAX_RECURSION_DEPTH 50
 #endif
 
 /*
@@ -790,29 +792,59 @@ static bool fdw_expression_tree_walker(Node *node, bool (*walker)(), void *conte
 */
 static List *fdw_pull_var_clause(Node *node, int flags)
 {
+    return fdw_pull_var_clause_internal(node, flags, 0, NIL);
+}
+
+static List *fdw_pull_var_clause_internal(Node *node, int flags, int depth, List *visited_nodes)
+{
   List *result = NIL;
+  ListCell *lc;
   
   if (node == NULL)
       return NIL;
       
-  elog(DEBUG2, "fdw_pull_var_clause: Processing node type %d (%s)",
-       (int)nodeTag(node), tagTypeToString(nodeTag(node)));
+  /* Prevent infinite recursion */
+  if (depth > MAX_RECURSION_DEPTH)
+  {
+      elog(WARNING, "fdw_pull_var_clause_internal: Maximum recursion depth (%d) exceeded, stopping recursion", MAX_RECURSION_DEPTH);
+      return NIL;
+  }
+  
+  /* Check for circular references by comparing node pointers */
+  foreach(lc, visited_nodes)
+  {
+      if (lfirst(lc) == node)
+      {
+          elog(DEBUG1, "fdw_pull_var_clause_internal: Circular reference detected, stopping recursion");
+          return NIL;
+      }
+  }
+  
+  elog(DEBUG2, "fdw_pull_var_clause_internal: Processing node type %d (%s) at depth %d",
+       (int)nodeTag(node), tagTypeToString(nodeTag(node)), depth);
 
   /* Handle RestrictInfo nodes by extracting their clause */
   if (IsA(node, RestrictInfo))
   {
       RestrictInfo *restrictinfo = (RestrictInfo *) node;
-      elog(DEBUG1, "fdw_pull_var_clause: Found RestrictInfo node, extracting clause");
+      elog(DEBUG1, "fdw_pull_var_clause_internal: Found RestrictInfo node, extracting clause");
       
       if (restrictinfo->clause)
       {
-          /* Recursively process the clause inside the RestrictInfo using our custom function
-           * to handle any nested RestrictInfo nodes */
-          return fdw_pull_var_clause((Node *) restrictinfo->clause, flags);
+          /* Add current node to visited list to prevent circular references */
+          List *new_visited = lappend(visited_nodes, node);
+          
+          /* Recursively process the clause inside the RestrictInfo */
+          result = fdw_pull_var_clause_internal((Node *) restrictinfo->clause, flags, depth + 1, new_visited);
+          
+          /* Clean up the visited list (remove our addition) */
+          list_delete_ptr(new_visited, node);
+          
+          return result;
       }
       else
       {
-          elog(DEBUG1, "fdw_pull_var_clause: RestrictInfo has NULL clause");
+          elog(DEBUG1, "fdw_pull_var_clause_internal: RestrictInfo has NULL clause");
           return NIL;
       }
   }
@@ -821,7 +853,7 @@ static List *fdw_pull_var_clause(Node *node, int flags)
   PG_TRY();
   {
       result = pull_var_clause(node, flags);
-      elog(DEBUG2, "fdw_pull_var_clause: Successfully processed non-RestrictInfo node");
+      elog(DEBUG2, "fdw_pull_var_clause_internal: Successfully processed non-RestrictInfo node");
   }
   PG_CATCH();
   {
@@ -832,7 +864,7 @@ static List *fdw_pull_var_clause(Node *node, int flags)
       edata = CopyErrorData();
       MemoryContextSwitchTo(oldcontext);
       
-      elog(ERROR, "fdw_pull_var_clause: Unexpected error processing node type %d (%s) - %s",
+      elog(ERROR, "fdw_pull_var_clause_internal: Unexpected error processing node type %d (%s) - %s",
            (int)nodeTag(node), tagTypeToString(nodeTag(node)), edata->message);
       
       FlushErrorState();
