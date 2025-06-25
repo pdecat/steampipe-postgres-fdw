@@ -13,6 +13,7 @@
 #include "catalog/pg_operator.h"
 #include "mb/pg_wchar.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "utils/lsyscache.h"
 #include "miscadmin.h"
 #include "parser/parsetree.h"
@@ -805,8 +806,9 @@ static List *fdw_pull_var_clause(Node *node, int flags)
       
       if (restrictinfo->clause)
       {
-          /* Recursively process the clause inside the RestrictInfo */
-          return pull_var_clause((Node *) restrictinfo->clause, flags);
+          /* Recursively process the clause inside the RestrictInfo using our custom function
+           * to handle any nested RestrictInfo nodes */
+          return fdw_pull_var_clause((Node *) restrictinfo->clause, flags);
       }
       else
       {
@@ -816,7 +818,29 @@ static List *fdw_pull_var_clause(Node *node, int flags)
   }
 
   /* For all other node types, use the standard pull_var_clause */
-  return pull_var_clause(node, flags);
+  PG_TRY();
+  {
+      result = pull_var_clause(node, flags);
+      elog(DEBUG2, "fdw_pull_var_clause: Successfully processed non-RestrictInfo node");
+  }
+  PG_CATCH();
+  {
+      ErrorData *edata;
+      MemoryContext oldcontext;
+      
+      oldcontext = MemoryContextSwitchTo(ErrorContext);
+      edata = CopyErrorData();
+      MemoryContextSwitchTo(oldcontext);
+      
+      elog(ERROR, "fdw_pull_var_clause: Unexpected error processing node type %d (%s) - %s",
+           (int)nodeTag(node), tagTypeToString(nodeTag(node)), edata->message);
+      
+      FlushErrorState();
+      PG_RE_THROW();
+  }
+  PG_END_TRY();
+  
+  return result;
 }
 #endif
 
