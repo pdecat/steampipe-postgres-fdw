@@ -436,6 +436,9 @@ static void fdwGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid forei
                              baserel,
                              NULL, /* default pathtarget */
                              baserel->rows,
+#if PG_VERSION_NUM >= 180000
+                             0,
+#endif
                              planstate->startupCost,
                              baserel->rows * baserel->reltarget->width * 100000, // table scan is very expensive
                              NIL,                                                /* no pathkeys */
@@ -461,6 +464,9 @@ static void fdwGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid forei
           baserel,
           NULL, /* default pathtarget */
           path->path.rows,
+#if PG_VERSION_NUM >= 180000
+          0,
+#endif
           path->path.startup_cost, path->path.total_cost,
           apply_pathkeys, NULL,
           NULL,
