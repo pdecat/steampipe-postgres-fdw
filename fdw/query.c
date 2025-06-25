@@ -577,7 +577,11 @@ deparse_sortgroup(PlannerInfo *root, Oid foreigntableid, RelOptInfo *rel)
 
     if ((expr = fdw_get_em_expr(ec, rel)))
     {
+#if PG_VERSION_NUM >= 180000
+      md->reversed = (key->pk_cmptype == BTGreaterStrategyNumber);
+#else
       md->reversed = (key->pk_strategy == BTGreaterStrategyNumber);
+#endif
       md->nulls_first = key->pk_nulls_first;
       md->key = key;
 
