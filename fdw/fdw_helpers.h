@@ -5,6 +5,9 @@
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
 #include "commands/defrem.h"
+#if PG_VERSION_NUM >= 180000
+#include "commands/explain_format.h"
+#endif
 #include "foreign/fdwapi.h"
 #include "foreign/foreign.h"
 #include "funcapi.h"
