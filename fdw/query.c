@@ -46,15 +46,10 @@ Expr *fdw_get_em_expr(EquivalenceClass *ec, RelOptInfo *rel);
  * compatibility issues */
 List *safe_pull_var_clause(Node *node, int flags, const char *context);
 
-/* PostgreSQL v16+ compatibility: Custom expression walker for RestrictInfo
- * nodes */
+/* PostgreSQL v16+ compatibility: Simple RestrictInfo handling */
 #if PG_VERSION_NUM >= 160000
-static bool fdw_expression_tree_walker(Node *node, bool (*walker)(),
-                                       void *context);
-static List *fdw_pull_var_clause(Node *node, int flags);
-static List *fdw_pull_var_clause_internal(Node *node, int flags, int depth,
-                                          List *visited_nodes);
-#define MAX_RECURSION_DEPTH 50
+/* No additional functions needed - we handle RestrictInfo nodes directly in
+ * safe_pull_var_clause */
 #endif
 
 /*
@@ -685,124 +680,8 @@ List *serializeDeparsedSortGroup(List *pathkeys) {
 }
 
 #if PG_VERSION_NUM >= 160000
-/*
- * PostgreSQL v16+ compatibility: Custom expression tree walker that handles
- * RestrictInfo nodes This is needed because PostgreSQL v16+ changed how
- * RestrictInfo nodes are processed
- */
-static bool fdw_expression_tree_walker(Node *node, bool (*walker)(),
-                                       void *context) {
-  if (node == NULL)
-    return false;
-
-  /* Handle RestrictInfo nodes specifically for PostgreSQL v16+ */
-  if (IsA(node, RestrictInfo)) {
-    RestrictInfo *restrictinfo = (RestrictInfo *)node;
-    elog(DEBUG2, "fdw_expression_tree_walker: Processing RestrictInfo node, "
-                 "walking clause");
-
-    /* Walk the clause inside the RestrictInfo */
-    if (restrictinfo->clause)
-      return walker((Node *)restrictinfo->clause, context);
-    else
-      return false;
-  }
-
-  /* For all other node types, use the standard expression_tree_walker */
-  return expression_tree_walker(node, walker, context);
-}
-
-/*
- * PostgreSQL v16+ compatibility: Custom pull_var_clause that uses our custom
- * walker
- */
-static List *fdw_pull_var_clause(Node *node, int flags) {
-  return fdw_pull_var_clause_internal(node, flags, 0, NIL);
-}
-
-static List *fdw_pull_var_clause_internal(Node *node, int flags, int depth,
-                                          List *visited_nodes) {
-  List *result = NIL;
-  ListCell *lc;
-
-  if (node == NULL)
-    return NIL;
-
-  /* Prevent infinite recursion */
-  if (depth > MAX_RECURSION_DEPTH) {
-    elog(WARNING,
-         "fdw_pull_var_clause_internal: Maximum recursion depth (%d) exceeded, "
-         "stopping recursion",
-         MAX_RECURSION_DEPTH);
-    return NIL;
-  }
-
-  /* Check for circular references by comparing node pointers */
-  foreach (lc, visited_nodes) {
-    if (lfirst(lc) == node) {
-      elog(DEBUG1, "fdw_pull_var_clause_internal: Circular reference detected, "
-                   "stopping recursion");
-      return NIL;
-    }
-  }
-
-  elog(DEBUG2,
-       "fdw_pull_var_clause_internal: Processing node type %d (%s) at depth %d",
-       (int)nodeTag(node), tagTypeToString(nodeTag(node)), depth);
-
-  /* Handle RestrictInfo nodes by extracting their clause */
-  if (IsA(node, RestrictInfo)) {
-    RestrictInfo *restrictinfo = (RestrictInfo *)node;
-    elog(DEBUG1, "fdw_pull_var_clause_internal: Found RestrictInfo node, "
-                 "extracting clause");
-
-    if (restrictinfo->clause) {
-      /* Add current node to visited list to prevent circular references */
-      List *new_visited = lappend(visited_nodes, node);
-
-      /* Recursively process the clause inside the RestrictInfo */
-      result = fdw_pull_var_clause_internal((Node *)restrictinfo->clause, flags,
-                                            depth + 1, new_visited);
-
-      /* Clean up the visited list (remove our addition) */
-      list_delete_ptr(new_visited, node);
-
-      return result;
-    } else {
-      elog(DEBUG1,
-           "fdw_pull_var_clause_internal: RestrictInfo has NULL clause");
-      return NIL;
-    }
-  }
-
-  /* For all other node types, use the standard pull_var_clause */
-  PG_TRY();
-  {
-    result = pull_var_clause(node, flags);
-    elog(DEBUG2, "fdw_pull_var_clause_internal: Successfully processed "
-                 "non-RestrictInfo node");
-  }
-  PG_CATCH();
-  {
-    ErrorData *edata;
-    MemoryContext oldcontext;
-
-    oldcontext = MemoryContextSwitchTo(ErrorContext);
-    edata = CopyErrorData();
-    MemoryContextSwitchTo(oldcontext);
-
-    elog(ERROR,
-         "fdw_pull_var_clause_internal: Unexpected error processing node type "
-         "%d (%s) - %s",
-         (int)nodeTag(node), tagTypeToString(nodeTag(node)), edata->message);
-
-    FlushErrorState();
-    PG_RE_THROW();
-  }
-  PG_END_TRY();
-
-  return result;
-}
+/* PostgreSQL v16+ compatibility: Simple RestrictInfo handling in
+ * safe_pull_var_clause */
 #endif
 
 /* DEBUG: Safe wrapper for pull_var_clause to catch PostgreSQL v16+
@@ -821,19 +700,22 @@ List *safe_pull_var_clause(Node *node, int flags, const char *context) {
   PG_TRY();
   {
 #if PG_VERSION_NUM >= 160000
-    /* For PostgreSQL v16+, use our custom function that handles RestrictInfo
-     * nodes */
-    result = fdw_pull_var_clause(node, flags);
-    elog(DEBUG2,
-         "safe_pull_var_clause: Successfully processed node from %s using "
-         "fdw_pull_var_clause",
+    /* For PostgreSQL v16+, handle RestrictInfo nodes by extracting their clause
+     */
+    Node *processed_node = node;
+    if (IsA(node, RestrictInfo)) {
+      RestrictInfo *restrictinfo = (RestrictInfo *)node;
+      elog(DEBUG1,
+           "safe_pull_var_clause: Found RestrictInfo node, extracting clause");
+      processed_node = (Node *)restrictinfo->clause;
+    }
+    result = pull_var_clause(processed_node, flags);
+    elog(DEBUG2, "safe_pull_var_clause: Successfully processed node from %s",
          context);
 #else
     /* For PostgreSQL v15 and earlier, use the standard function */
     result = pull_var_clause(node, flags);
-    elog(DEBUG2,
-         "safe_pull_var_clause: Successfully processed node from %s using "
-         "pull_var_clause",
+    elog(DEBUG2, "safe_pull_var_clause: Successfully processed node from %s",
          context);
 #endif
   }
