@@ -1,24 +1,24 @@
-#include "steampipe_postgres_fdw.h"
 #include "common.h"
+#include "steampipe_postgres_fdw.h"
 #if PG_VERSION_NUM < 120000
 #include "optimizer/var.h"
 #else
 #include "optimizer/optimizer.h"
 #endif
-#include "optimizer/clauses.h"
-#include "optimizer/pathnode.h"
-#include "optimizer/subselect.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_operator.h"
 #include "mb/pg_wchar.h"
+#include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
-#include "utils/lsyscache.h"
-#include "miscadmin.h"
-#include "parser/parsetree.h"
 #include "nodes/value.h"
+#include "optimizer/clauses.h"
+#include "optimizer/pathnode.h"
+#include "optimizer/subselect.h"
+#include "parser/parsetree.h"
 #include "pg_config.h"
+#include "utils/lsyscache.h"
 
 /* Third argument to get_attname was introduced in [8237f27] (release 11) */
 #if PG_VERSION_NUM >= 110000
@@ -42,14 +42,18 @@ List *clausesInvolvingAttr(Index relid, AttrNumber attnum,
 
 Expr *fdw_get_em_expr(EquivalenceClass *ec, RelOptInfo *rel);
 
-/* DEBUG: Safe wrapper for pull_var_clause to catch PostgreSQL v16+ compatibility issues */
+/* DEBUG: Safe wrapper for pull_var_clause to catch PostgreSQL v16+
+ * compatibility issues */
 List *safe_pull_var_clause(Node *node, int flags, const char *context);
 
-/* PostgreSQL v16+ compatibility: Custom expression walker for RestrictInfo nodes */
+/* PostgreSQL v16+ compatibility: Custom expression walker for RestrictInfo
+ * nodes */
 #if PG_VERSION_NUM >= 160000
-static bool fdw_expression_tree_walker(Node *node, bool (*walker)(), void *context);
+static bool fdw_expression_tree_walker(Node *node, bool (*walker)(),
+                                       void *context);
 static List *fdw_pull_var_clause(Node *node, int flags);
-static List *fdw_pull_var_clause_internal(Node *node, int flags, int depth, List *visited_nodes);
+static List *fdw_pull_var_clause_internal(Node *node, int flags, int depth,
+                                          List *visited_nodes);
 #define MAX_RECURSION_DEPTH 50
 #endif
 
@@ -59,74 +63,70 @@ static List *fdw_pull_var_clause_internal(Node *node, int flags, int depth, List
  *	- the targetcolumns
  *	- the restrictinfo
  */
-List *
-extractColumns(List *reltargetlist, List *restrictinfolist)
-{
+List *extractColumns(List *reltargetlist, List *restrictinfolist) {
   ListCell *lc;
   List *columns = NULL;
   int i = 0;
-  
+
   /* DEBUG: Log PostgreSQL version information for compatibility debugging */
-  elog(DEBUG1, "extractColumns: PostgreSQL compile-time version: %d, restrictinfolist length: %d",
+  elog(DEBUG1,
+       "extractColumns: PostgreSQL compile-time version: %d, restrictinfolist "
+       "length: %d",
        PG_VERSION_NUM, list_length(restrictinfolist));
 
-  foreach (lc, reltargetlist)
-  {
+  foreach (lc, reltargetlist) {
     List *targetcolumns;
     Node *node = (Node *)lfirst(lc);
 
-    targetcolumns = safe_pull_var_clause(node,
+    targetcolumns =
+        safe_pull_var_clause(node,
 #if PG_VERSION_NUM >= 90600
-                                    PVC_RECURSE_AGGREGATES |
-                                        PVC_RECURSE_PLACEHOLDERS,
+                             PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS,
 #else
-                                    PVC_RECURSE_AGGREGATES,
-                                    PVC_RECURSE_PLACEHOLDERS,
+                             PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS,
 #endif
-                                    "extractColumns_targetlist");
+                             "extractColumns_targetlist");
     columns = list_union(columns, targetcolumns);
     i++;
   }
-  foreach (lc, restrictinfolist)
-  {
+  foreach (lc, restrictinfolist) {
     List *targetcolumns;
     RestrictInfo *node = (RestrictInfo *)lfirst(lc);
-    
+
     /* DEBUG: Log node type information for PostgreSQL v16+ compatibility */
     NodeTag clause_type = nodeTag((Node *)node->clause);
-    elog(DEBUG1, "extractColumns: Processing RestrictInfo node, clause type: %d (%s), PostgreSQL version: %d",
+    elog(DEBUG1,
+         "extractColumns: Processing RestrictInfo node, clause type: %d (%s), "
+         "PostgreSQL version: %d",
          (int)clause_type, tagTypeToString(clause_type), PG_VERSION_NUM);
-    
+
     /* DEBUG: Log the node structure for debugging */
     if (node->clause) {
-        elog(DEBUG2, "extractColumns: RestrictInfo clause nodeToString: %s", nodeToString((Node *)node->clause));
+      elog(DEBUG2, "extractColumns: RestrictInfo clause nodeToString: %s",
+           nodeToString((Node *)node->clause));
     }
-    
+
     /* PostgreSQL v16+ compatibility: Handle RestrictInfo nodes properly */
 #if PG_VERSION_NUM >= 160000
-    /* In PostgreSQL v16+, handle RestrictInfo clause extraction more carefully */
-    elog(DEBUG1, "extractColumns: PostgreSQL v16+ path - using fdw_pull_var_clause for RestrictInfo handling");
-    if (node && node->clause) {
-      targetcolumns = fdw_pull_var_clause((Node *)node->clause,
-                                      PVC_RECURSE_AGGREGATES |
-                                          PVC_RECURSE_PLACEHOLDERS);
-    } else {
-      elog(DEBUG1, "extractColumns: NULL RestrictInfo node or clause for PostgreSQL v16+");
-      targetcolumns = NIL;
-    }
+    /* In PostgreSQL v16+, use safe_pull_var_clause but with our custom walker
+     * for RestrictInfo handling */
+    elog(DEBUG1, "extractColumns: PostgreSQL v16+ path - using "
+                 "safe_pull_var_clause with RestrictInfo support");
+    targetcolumns = safe_pull_var_clause(
+        (Node *)node->clause, PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS,
+        "extractColumns_v16");
 #else
     /* For PostgreSQL v15 and earlier, use the original approach */
-    targetcolumns = safe_pull_var_clause((Node *)node->clause,
+    targetcolumns =
+        safe_pull_var_clause((Node *)node->clause,
 #if PG_VERSION_NUM >= 90600
-                                    PVC_RECURSE_AGGREGATES |
-                                        PVC_RECURSE_PLACEHOLDERS,
+                             PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS,
 #else
-                                    PVC_RECURSE_AGGREGATES,
-                                    PVC_RECURSE_PLACEHOLDERS,
+                             PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS,
 #endif
-                                    "extractColumns_legacy");
+                             "extractColumns_legacy");
 #endif
-    
+
     columns = list_union(columns, targetcolumns);
   }
   return columns;
@@ -136,18 +136,15 @@ extractColumns(List *reltargetlist, List *restrictinfolist)
  * Initialize the array of "ConversionInfo" elements, needed to convert go
  * objects back to suitable postgresql data structures.
  */
-void initConversioninfo(ConversionInfo **cinfos, AttInMetadata *attinmeta)
-{
+void initConversioninfo(ConversionInfo **cinfos, AttInMetadata *attinmeta) {
   int i;
 
-  for (i = 0; i < attinmeta->tupdesc->natts; i++)
-  {
+  for (i = 0; i < attinmeta->tupdesc->natts; i++) {
     Form_pg_attribute attr = TupleDescAttr(attinmeta->tupdesc, i);
     Oid outfuncoid;
     bool typIsVarlena;
 
-    if (!attr->attisdropped)
-    {
+    if (!attr->attisdropped) {
       ConversionInfo *cinfo = palloc0(sizeof(ConversionInfo));
 
       cinfo->attoutfunc = (FmgrInfo *)palloc0(sizeof(FmgrInfo));
@@ -162,17 +159,13 @@ void initConversioninfo(ConversionInfo **cinfos, AttInMetadata *attinmeta)
       cinfo->attndims = attr->attndims;
       cinfo->need_quote = false;
       cinfos[i] = cinfo;
-    }
-    else
-    {
+    } else {
       cinfos[i] = NULL;
     }
   }
 }
 
-char *
-getOperatorString(Oid opoid)
-{
+char *getOperatorString(Oid opoid) {
   HeapTuple tp;
   Form_pg_operator operator;
 
@@ -187,11 +180,8 @@ getOperatorString(Oid opoid)
 /*
  * Returns the node of interest from a node.
  */
-Node *
-unnestClause(Node *node)
-{
-  switch (node->type)
-  {
+Node *unnestClause(Node *node) {
+  switch (node->type) {
   case T_RelabelType:
     return (Node *)((RelabelType *)node)->arg;
   case T_ArrayCoerceExpr:
@@ -202,12 +192,10 @@ unnestClause(Node *node)
 }
 
 void swapOperandsAsNeeded(Node **left, Node **right, Oid *opoid,
-                          Relids base_relids)
-{
+                          Relids base_relids) {
   HeapTuple tp;
   Form_pg_operator op;
-  Node *l = *left,
-       *r = *right;
+  Node *l = *left, *r = *right;
 
   tp = SearchSysCache1(OPEROID, ObjectIdGetDatum(*opoid));
   if (!HeapTupleIsValid(tp))
@@ -219,18 +207,14 @@ void swapOperandsAsNeeded(Node **left, Node **right, Oid *opoid,
   /* target rel, swap them. */
   /* Same thing is left is not a var at all. */
   /* To swap them, we have to lookup the commutator operator. */
-  if (IsA(r, Var))
-  {
+  if (IsA(r, Var)) {
     Var *rvar = (Var *)r;
 
-    if (!IsA(l, Var) ||
-        (!bms_is_member(((Var *)l)->varno, base_relids) &&
-         bms_is_member(rvar->varno, base_relids)))
-    {
+    if (!IsA(l, Var) || (!bms_is_member(((Var *)l)->varno, base_relids) &&
+                         bms_is_member(rvar->varno, base_relids))) {
       /* If the operator has no commutator operator, */
       /* bail out. */
-      if (op->oprcom == 0)
-      {
+      if (op->oprcom == 0) {
         return;
       }
       {
@@ -249,20 +233,17 @@ void swapOperandsAsNeeded(Node **left, Node **right, Oid *opoid,
  *	- a Param
  *	- a Var from another relation
  */
-OpExpr *
-canonicalOpExpr(OpExpr *opExpr, Relids base_relids)
-{
+OpExpr *canonicalOpExpr(OpExpr *opExpr, Relids base_relids) {
   Oid operatorid = opExpr->opno;
-  Node *l,
-      *r;
+  Node *l, *r;
   OpExpr *result = NULL;
 
   int length = (int)list_length(opExpr->args);
-  elog(DEBUG5, "canonicalOpExpr, arg length: %d, base_relids %x", length, (int)base_relids);
+  elog(DEBUG5, "canonicalOpExpr, arg length: %d, base_relids %x", length,
+       (int)base_relids);
 
   /* Only treat binary operators for now. */
-  if (length == 2)
-  {
+  if (length == 2) {
     l = unnestClause(list_nth(opExpr->args, 0));
     r = unnestClause(list_nth(opExpr->args, 1));
 
@@ -271,23 +252,19 @@ canonicalOpExpr(OpExpr *opExpr, Relids base_relids)
 
     swapOperandsAsNeeded(&l, &r, &operatorid, base_relids);
 
-    /* varno:	    index of this var's relation in the range table, or INNER_VAR/OUTER_VAR/INDEX_VAR
-       varattno:	attribute number of this var, or zero for all attrs ("whole-row Var") */
+    /* varno:	    index of this var's relation in the range table, or
+       INNER_VAR/OUTER_VAR/INDEX_VAR varattno:	attribute number of this var, or
+       zero for all attrs ("whole-row Var") */
 
-    if (IsA(l, Var) && bms_is_member(((Var *)l)->varno, base_relids) && ((Var *)l)->varattno >= 1)
-    {
-      result = (OpExpr *)make_opclause(operatorid,
-                                       opExpr->opresulttype,
-                                       opExpr->opretset,
-                                       (Expr *)l, (Expr *)r,
-                                       opExpr->opcollid,
-                                       opExpr->inputcollid);
+    if (IsA(l, Var) && bms_is_member(((Var *)l)->varno, base_relids) &&
+        ((Var *)l)->varattno >= 1) {
+      result = (OpExpr *)make_opclause(operatorid, opExpr->opresulttype,
+                                       opExpr->opretset, (Expr *)l, (Expr *)r,
+                                       opExpr->opcollid, opExpr->inputcollid);
 
       elog(DEBUG5, "canonicalOpExpr returning result");
     }
-  }
-  else
-  {
+  } else {
     elog(DEBUG5, "canonicalOpExpr - arg length %d, ignoring", length);
   }
 
@@ -301,20 +278,16 @@ canonicalOpExpr(OpExpr *opExpr, Relids base_relids)
  *	- a Param
  *	- a Var from another relation
  */
-ScalarArrayOpExpr *
-canonicalScalarArrayOpExpr(ScalarArrayOpExpr *opExpr,
-                           Relids base_relids)
-{
+ScalarArrayOpExpr *canonicalScalarArrayOpExpr(ScalarArrayOpExpr *opExpr,
+                                              Relids base_relids) {
   Oid operatorid = opExpr->opno;
-  Node *l,
-      *r;
+  Node *l, *r;
   ScalarArrayOpExpr *result = NULL;
   HeapTuple tp;
   Form_pg_operator op;
 
   /* Only treat binary operators for now. */
-  if (list_length(opExpr->args) == 2)
-  {
+  if (list_length(opExpr->args) == 2) {
     l = unnestClause(list_nth(opExpr->args, 0));
     r = unnestClause(list_nth(opExpr->args, 1));
     tp = SearchSysCache1(OPEROID, ObjectIdGetDatum(operatorid));
@@ -322,8 +295,8 @@ canonicalScalarArrayOpExpr(ScalarArrayOpExpr *opExpr,
       elog(ERROR, "cache lookup failed for operator %u", operatorid);
     op = (Form_pg_operator)GETSTRUCT(tp);
     ReleaseSysCache(tp);
-    if (IsA(l, Var) && bms_is_member(((Var *)l)->varno, base_relids) && ((Var *)l)->varattno >= 1)
-    {
+    if (IsA(l, Var) && bms_is_member(((Var *)l)->varno, base_relids) &&
+        ((Var *)l)->varattno >= 1) {
       result = makeNode(ScalarArrayOpExpr);
       result->opno = operatorid;
       result->opfuncid = op->oprcode;
@@ -338,43 +311,37 @@ canonicalScalarArrayOpExpr(ScalarArrayOpExpr *opExpr,
 
 #if PG_VERSION_NUM >= 150000
 /*
- *	Returns a "Value" node containing the string name of the column from a var.
+ *	Returns a "Value" node containing the string name of the column from a
+ *var.
  */
-String *
-colnameFromVar(Var *var, PlannerInfo *root, FdwPlanState *planstate)
-{
+String *colnameFromVar(Var *var, PlannerInfo *root, FdwPlanState *planstate) {
   RangeTblEntry *rte = rte = planner_rt_fetch(var->varno, root);
 
-  //    elog(NOTICE, "colnameFromVar relid %d, varattno %d", rte->relid, var->varattno);
+  //    elog(NOTICE, "colnameFromVar relid %d, varattno %d", rte->relid,
+  //    var->varattno);
   char *attname = get_attname(rte->relid, var->varattno);
 
-  if (attname == NULL)
-  {
+  if (attname == NULL) {
     return NULL;
-  }
-  else
-  {
+  } else {
     return makeString(attname);
   }
 }
 #else
 /*
- *	Returns a "Value" node containing the string name of the column from a var.
+ *	Returns a "Value" node containing the string name of the column from a
+ *var.
  */
-Value *
-colnameFromVar(Var *var, PlannerInfo *root, FdwPlanState *planstate)
-{
+Value *colnameFromVar(Var *var, PlannerInfo *root, FdwPlanState *planstate) {
   RangeTblEntry *rte = rte = planner_rt_fetch(var->varno, root);
 
-  //    elog(NOTICE, "colnameFromVar relid %d, varattno %d", rte->relid, var->varattno);
+  //    elog(NOTICE, "colnameFromVar relid %d, varattno %d", rte->relid,
+  //    var->varattno);
   char *attname = get_attname(rte->relid, var->varattno);
 
-  if (attname == NULL)
-  {
+  if (attname == NULL) {
     return NULL;
-  }
-  else
-  {
+  } else {
     return makeString(attname);
   }
 }
@@ -384,65 +351,63 @@ colnameFromVar(Var *var, PlannerInfo *root, FdwPlanState *planstate)
  *	Test whether an attribute identified by its relid and attno
  *	is present in a list of restrictinfo
  */
-bool isAttrInRestrictInfo(Index relid, AttrNumber attno, RestrictInfo *restrictinfo)
-{
+bool isAttrInRestrictInfo(Index relid, AttrNumber attno,
+                          RestrictInfo *restrictinfo) {
   /* DEBUG: Log RestrictInfo processing for PostgreSQL v16+ compatibility */
   NodeTag clause_type = nodeTag((Node *)restrictinfo->clause);
-  elog(DEBUG1, "isAttrInRestrictInfo: Processing RestrictInfo for relid %d, attno %d, clause type: %d (%s)",
+  elog(DEBUG1,
+       "isAttrInRestrictInfo: Processing RestrictInfo for relid %d, attno %d, "
+       "clause type: %d (%s)",
        relid, attno, (int)clause_type, tagTypeToString(clause_type));
-  
+
   /* DEBUG: Additional logging for the clause structure */
   if (restrictinfo->clause) {
-      elog(DEBUG2, "isAttrInRestrictInfo: RestrictInfo clause nodeToString: %s",
-           nodeToString((Node *)restrictinfo->clause));
+    elog(DEBUG2, "isAttrInRestrictInfo: RestrictInfo clause nodeToString: %s",
+         nodeToString((Node *)restrictinfo->clause));
   }
-  
+
   List *vars;
-  
+
   /* PostgreSQL v16+ compatibility: Handle RestrictInfo nodes properly */
 #if PG_VERSION_NUM >= 160000
-  /* In PostgreSQL v16+, we need to handle RestrictInfo nodes differently
-   * Use our custom fdw_pull_var_clause that properly handles RestrictInfo nodes */
-  elog(DEBUG1, "isAttrInRestrictInfo: PostgreSQL v16+ path - using fdw_pull_var_clause for RestrictInfo handling");
+  /* In PostgreSQL v16+, use safe_pull_var_clause with RestrictInfo support */
+  elog(DEBUG1, "isAttrInRestrictInfo: PostgreSQL v16+ path - using "
+               "safe_pull_var_clause with RestrictInfo support");
   if (restrictinfo && restrictinfo->clause) {
-    vars = fdw_pull_var_clause((Node *)restrictinfo->clause,
-                               PVC_RECURSE_AGGREGATES |
-                                   PVC_RECURSE_PLACEHOLDERS);
+    vars =
+        safe_pull_var_clause((Node *)restrictinfo->clause,
+                             PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS,
+                             "isAttrInRestrictInfo_v16");
   } else {
-    elog(DEBUG1, "isAttrInRestrictInfo: NULL restrictinfo or clause for PostgreSQL v16+");
+    elog(DEBUG1, "isAttrInRestrictInfo: NULL restrictinfo or clause for "
+                 "PostgreSQL v16+");
     return false;
   }
 #else
   /* For PostgreSQL v15 and earlier, use the original approach */
   vars = safe_pull_var_clause((Node *)restrictinfo->clause,
 #if PG_VERSION_NUM >= 90600
-                               PVC_RECURSE_AGGREGATES |
-                                   PVC_RECURSE_PLACEHOLDERS,
+                              PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS,
 #else
-                               PVC_RECURSE_AGGREGATES,
-                               PVC_RECURSE_PLACEHOLDERS,
+                              PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS,
 #endif
-                               "isAttrInRestrictInfo_legacy");
+                              "isAttrInRestrictInfo_legacy");
 #endif
-  
+
   ListCell *lc;
 
-  foreach (lc, vars)
-  {
+  foreach (lc, vars) {
     Var *var = (Var *)lfirst(lc);
 
-    if (var->varno == relid && var->varattno == attno)
-    {
+    if (var->varno == relid && var->varattno == attno) {
       return true;
     }
   }
   return false;
 }
 
-List *
-clausesInvolvingAttr(Index relid, AttrNumber attnum,
-                     EquivalenceClass *ec)
-{
+List *clausesInvolvingAttr(Index relid, AttrNumber attnum,
+                           EquivalenceClass *ec) {
   List *clauses = NULL;
 
   /*
@@ -450,16 +415,13 @@ clausesInvolvingAttr(Index relid, AttrNumber attnum,
    * an outer join, or a desired sort order. So we better leave it
    * untouched.
    */
-  if (ec->ec_members->length > 1)
-  {
+  if (ec->ec_members->length > 1) {
     ListCell *ri_lc;
 
-    foreach (ri_lc, ec->ec_sources)
-    {
+    foreach (ri_lc, ec->ec_sources) {
       RestrictInfo *ri = (RestrictInfo *)lfirst(ri_lc);
 
-      if (isAttrInRestrictInfo(relid, attnum, ri))
-      {
+      if (isAttrInRestrictInfo(relid, attnum, ri)) {
         clauses = lappend(clauses, ri);
       }
     }
@@ -474,9 +436,7 @@ clausesInvolvingAttr(Index relid, AttrNumber attnum,
  * returns whether ALL sort fields can be pushed down
  */
 bool computeDeparsedSortGroup(List *deparsed, FdwPlanState *planstate,
-                              List **apply_pathkeys,
-                              List **deparsed_pathkeys)
-{
+                              List **apply_pathkeys, List **deparsed_pathkeys) {
   List *sortable_fields = NULL;
   ListCell *lc, *lc2;
 
@@ -485,28 +445,25 @@ bool computeDeparsedSortGroup(List *deparsed, FdwPlanState *planstate,
   Assert(*deparsed_pathkeys == NIL);
 
   /* Don't ask FDW if nothing to sort */
-  if (deparsed == NIL){
+  if (deparsed == NIL) {
     return true;
-    }
+  }
 
-  sortable_fields = goFdwCanSort(deparsed,planstate);
+  sortable_fields = goFdwCanSort(deparsed, planstate);
   int numSortFields = list_length(sortable_fields);
-   int numSortableFields = list_length(deparsed);
+  int numSortableFields = list_length(deparsed);
   bool canPushdownAllSortFields = numSortFields == numSortableFields;
 
   /* Don't go further if FDW can't enforce any sort */
   if (sortable_fields == NIL)
     return false;
 
-  foreach (lc, sortable_fields)
-  {
+  foreach (lc, sortable_fields) {
     FdwDeparsedSortGroup *sortable_md = (FdwDeparsedSortGroup *)lfirst(lc);
-    foreach (lc2, deparsed)
-    {
+    foreach (lc2, deparsed) {
       FdwDeparsedSortGroup *wanted_md = lfirst(lc2);
 
-      if (sortable_md->attnum == wanted_md->attnum)
-      {
+      if (sortable_md->attnum == wanted_md->attnum) {
         *apply_pathkeys = lappend(*apply_pathkeys, wanted_md->key);
         *deparsed_pathkeys = lappend(*deparsed_pathkeys, wanted_md);
       }
@@ -516,17 +473,13 @@ bool computeDeparsedSortGroup(List *deparsed, FdwPlanState *planstate,
   return canPushdownAllSortFields;
 }
 
-List *
-findPaths(PlannerInfo *root, RelOptInfo *baserel, List *possiblePaths,
-          int startupCost,
-          FdwPlanState *state,
-          List *apply_pathkeys, List *deparsed_pathkeys)
-{
+List *findPaths(PlannerInfo *root, RelOptInfo *baserel, List *possiblePaths,
+                int startupCost, FdwPlanState *state, List *apply_pathkeys,
+                List *deparsed_pathkeys) {
   List *result = NULL;
   ListCell *lc;
 
-  foreach (lc, possiblePaths)
-  {
+  foreach (lc, possiblePaths) {
     List *item = lfirst(lc);
     List *attrnos = linitial(item);
     ListCell *attno_lc;
@@ -538,90 +491,77 @@ findPaths(PlannerInfo *root, RelOptInfo *baserel, List *possiblePaths,
     /* matching the path list. */
     /* Every key must be present in either, a join clause or an */
     /* equivalence_class. */
-    foreach (attno_lc, attrnos)
-    {
+    foreach (attno_lc, attrnos) {
       AttrNumber attnum = lfirst_int(attno_lc);
       ListCell *lc;
       List *clauses = NULL;
 
       /* Look in the equivalence classes. */
-      foreach (lc, root->eq_classes)
-      {
+      foreach (lc, root->eq_classes) {
         EquivalenceClass *ec = (EquivalenceClass *)lfirst(lc);
-        List *ec_clauses = clausesInvolvingAttr(baserel->relid,
-                                                attnum,
-                                                ec);
+        List *ec_clauses = clausesInvolvingAttr(baserel->relid, attnum, ec);
 
         clauses = list_concat(clauses, ec_clauses);
-        if (ec_clauses != NIL)
-        {
+        if (ec_clauses != NIL) {
           outer_relids = bms_union(outer_relids, ec->ec_relids);
         }
       }
       /* Do the same thing for the outer joins */
-      foreach (lc, list_union(root->left_join_clauses,
-                              root->right_join_clauses))
-      {
+      foreach (lc,
+               list_union(root->left_join_clauses, root->right_join_clauses)) {
         RestrictInfo *ri = (RestrictInfo *)lfirst(lc);
 
-        if (isAttrInRestrictInfo(baserel->relid, attnum, ri))
-        {
+        if (isAttrInRestrictInfo(baserel->relid, attnum, ri)) {
           clauses = lappend(clauses, ri);
-          outer_relids = bms_union(outer_relids,
-                                   ri->outer_relids);
+          outer_relids = bms_union(outer_relids, ri->outer_relids);
         }
       }
       /* We did NOT find anything for this key, bail out */
-      if (clauses == NIL)
-      {
+      if (clauses == NIL) {
         allclauses = NULL;
         break;
-      }
-      else
-      {
+      } else {
         allclauses = list_concat(allclauses, clauses);
       }
     }
     /* Every key has a corresponding restriction, we can build */
     /* the parameterized path and add it to the plan. */
-    if (allclauses != NIL)
-    {
-      Bitmapset *req_outer = bms_difference(outer_relids,
-                                            bms_make_singleton(baserel->relid));
+    if (allclauses != NIL) {
+      Bitmapset *req_outer =
+          bms_difference(outer_relids, bms_make_singleton(baserel->relid));
       ParamPathInfo *ppi;
       ForeignPath *foreignPath;
 
-      if (!bms_is_empty(req_outer))
-      {
+      if (!bms_is_empty(req_outer)) {
         ppi = makeNode(ParamPathInfo);
         ppi->ppi_req_outer = req_outer;
         ppi->ppi_rows = nbrows;
         ppi->ppi_clauses = list_concat(ppi->ppi_clauses, allclauses);
         /* Add a simple parameterized path */
-        foreignPath = create_foreignscan_path(
-            root, baserel,
+        foreignPath =
+            create_foreignscan_path(root, baserel,
 #if PG_VERSION_NUM >= 90600
-            NULL, /* default pathtarget */
+                                    NULL, /* default pathtarget */
 #endif
-            nbrows,
+                                    nbrows,
 #if PG_VERSION_NUM >= 180000
-            0,
+                                    0,
 #endif
-            startupCost,
+                                    startupCost,
 #if PG_VERSION_NUM >= 90600
-            nbrows * baserel->reltarget->width,
+                                    nbrows * baserel->reltarget->width,
 #else
-            nbrows * baserel->width,
+                                    nbrows * baserel->width,
 #endif
-            NIL, /* no pathkeys */
-            NULL,
+                                    NIL, /* no pathkeys */
+                                    NULL,
 #if PG_VERSION_NUM >= 90500
-            NULL,
+                                    NULL,
 #endif
 #if PG_VERSION_NUM >= 170000
-            NULL,
+                                    NULL,
 #endif
-            NULL);
+                                    NULL);
 
         foreignPath->path.param_info = ppi;
         result = lappend(result, foreignPath);
@@ -636,9 +576,8 @@ findPaths(PlannerInfo *root, RelOptInfo *baserel, List *possiblePaths,
  * This function will return data if all the PathKey belong to the current
  * foreign table.
  */
-List *
-deparse_sortgroup(PlannerInfo *root, Oid foreigntableid, RelOptInfo *rel)
-{
+List *deparse_sortgroup(PlannerInfo *root, Oid foreigntableid,
+                        RelOptInfo *rel) {
   List *result = NULL;
   ListCell *lc;
 
@@ -646,16 +585,14 @@ deparse_sortgroup(PlannerInfo *root, Oid foreigntableid, RelOptInfo *rel)
   if (!root->query_pathkeys)
     return NIL;
 
-  foreach (lc, root->query_pathkeys)
-  {
+  foreach (lc, root->query_pathkeys) {
     PathKey *key = (PathKey *)lfirst(lc);
     FdwDeparsedSortGroup *md = palloc0(sizeof(FdwDeparsedSortGroup));
     EquivalenceClass *ec = key->pk_eclass;
     Expr *expr;
     bool found = false;
 
-    if ((expr = fdw_get_em_expr(ec, rel)))
-    {
+    if ((expr = fdw_get_em_expr(ec, rel))) {
 #if PG_VERSION_NUM >= 180000
       md->reversed = (key->pk_cmptype == BTGreaterStrategyNumber);
 #else
@@ -664,17 +601,14 @@ deparse_sortgroup(PlannerInfo *root, Oid foreigntableid, RelOptInfo *rel)
       md->nulls_first = key->pk_nulls_first;
       md->key = key;
 
-      if (IsA(expr, Var))
-      {
+      if (IsA(expr, Var)) {
         Var *var = (Var *)expr;
         md->attname = (Name)strdup(get_attname(foreigntableid, var->varattno));
         md->attnum = var->varattno;
         found = true;
       }
       /* ORDER BY clauses having a COLLATE option will be RelabelType */
-      else if (IsA(expr, RelabelType) &&
-               IsA(((RelabelType *)expr)->arg, Var))
-      {
+      else if (IsA(expr, RelabelType) && IsA(((RelabelType *)expr)->arg, Var)) {
         Var *var = (Var *)((RelabelType *)expr)->arg;
         Oid collid = ((RelabelType *)expr)->resultcollid;
 
@@ -690,13 +624,11 @@ deparse_sortgroup(PlannerInfo *root, Oid foreigntableid, RelOptInfo *rel)
 
     if (found)
       result = lappend(result, md);
-    else
-    {
+    else {
       /* pfree() current entry */
       pfree(md);
       /* pfree() all previous entries */
-      while ((lc = list_head(result)) != NULL)
-      {
+      while ((lc = list_head(result)) != NULL) {
         md = (FdwDeparsedSortGroup *)lfirst(lc);
         result = list_delete_ptr(result, md);
         pfree(md);
@@ -708,17 +640,13 @@ deparse_sortgroup(PlannerInfo *root, Oid foreigntableid, RelOptInfo *rel)
   return result;
 }
 
-Expr *
-fdw_get_em_expr(EquivalenceClass *ec, RelOptInfo *rel)
-{
+Expr *fdw_get_em_expr(EquivalenceClass *ec, RelOptInfo *rel) {
   ListCell *lc_em;
 
-  foreach (lc_em, ec->ec_members)
-  {
+  foreach (lc_em, ec->ec_members) {
     EquivalenceMember *em = lfirst(lc_em);
 
-    if (bms_equal(em->em_relids, rel->relids))
-    {
+    if (bms_equal(em->em_relids, rel->relids)) {
       /*
        * If there is more than one equivalence member whose Vars are
        * taken entirely from this relation, we'll be content to choose
@@ -732,17 +660,13 @@ fdw_get_em_expr(EquivalenceClass *ec, RelOptInfo *rel)
   return NULL;
 }
 
-List *
-serializeDeparsedSortGroup(List *pathkeys)
-{
+List *serializeDeparsedSortGroup(List *pathkeys) {
   List *result = NIL;
   ListCell *lc;
 
-  foreach (lc, pathkeys)
-  {
+  foreach (lc, pathkeys) {
     List *item = NIL;
-    FdwDeparsedSortGroup *key = (FdwDeparsedSortGroup *)
-        lfirst(lc);
+    FdwDeparsedSortGroup *key = (FdwDeparsedSortGroup *)lfirst(lc);
 
     item = lappend(item, makeString(NameStr(*(key->attname))));
     item = lappend(item, makeInteger(key->attnum));
@@ -762,25 +686,26 @@ serializeDeparsedSortGroup(List *pathkeys)
 
 #if PG_VERSION_NUM >= 160000
 /*
-* PostgreSQL v16+ compatibility: Custom expression tree walker that handles RestrictInfo nodes
-* This is needed because PostgreSQL v16+ changed how RestrictInfo nodes are processed
-*/
-static bool fdw_expression_tree_walker(Node *node, bool (*walker)(), void *context)
-{
+ * PostgreSQL v16+ compatibility: Custom expression tree walker that handles
+ * RestrictInfo nodes This is needed because PostgreSQL v16+ changed how
+ * RestrictInfo nodes are processed
+ */
+static bool fdw_expression_tree_walker(Node *node, bool (*walker)(),
+                                       void *context) {
   if (node == NULL)
-      return false;
+    return false;
 
   /* Handle RestrictInfo nodes specifically for PostgreSQL v16+ */
-  if (IsA(node, RestrictInfo))
-  {
-      RestrictInfo *restrictinfo = (RestrictInfo *) node;
-      elog(DEBUG2, "fdw_expression_tree_walker: Processing RestrictInfo node, walking clause");
-      
-      /* Walk the clause inside the RestrictInfo */
-      if (restrictinfo->clause)
-          return walker((Node *) restrictinfo->clause, context);
-      else
-          return false;
+  if (IsA(node, RestrictInfo)) {
+    RestrictInfo *restrictinfo = (RestrictInfo *)node;
+    elog(DEBUG2, "fdw_expression_tree_walker: Processing RestrictInfo node, "
+                 "walking clause");
+
+    /* Walk the clause inside the RestrictInfo */
+    if (restrictinfo->clause)
+      return walker((Node *)restrictinfo->clause, context);
+    else
+      return false;
   }
 
   /* For all other node types, use the standard expression_tree_walker */
@@ -788,172 +713,187 @@ static bool fdw_expression_tree_walker(Node *node, bool (*walker)(), void *conte
 }
 
 /*
-* PostgreSQL v16+ compatibility: Custom pull_var_clause that uses our custom walker
-*/
-static List *fdw_pull_var_clause(Node *node, int flags)
-{
-    return fdw_pull_var_clause_internal(node, flags, 0, NIL);
+ * PostgreSQL v16+ compatibility: Custom pull_var_clause that uses our custom
+ * walker
+ */
+static List *fdw_pull_var_clause(Node *node, int flags) {
+  return fdw_pull_var_clause_internal(node, flags, 0, NIL);
 }
 
-static List *fdw_pull_var_clause_internal(Node *node, int flags, int depth, List *visited_nodes)
-{
+static List *fdw_pull_var_clause_internal(Node *node, int flags, int depth,
+                                          List *visited_nodes) {
   List *result = NIL;
   ListCell *lc;
-  
+
   if (node == NULL)
-      return NIL;
-      
+    return NIL;
+
   /* Prevent infinite recursion */
-  if (depth > MAX_RECURSION_DEPTH)
-  {
-      elog(WARNING, "fdw_pull_var_clause_internal: Maximum recursion depth (%d) exceeded, stopping recursion", MAX_RECURSION_DEPTH);
-      return NIL;
+  if (depth > MAX_RECURSION_DEPTH) {
+    elog(WARNING,
+         "fdw_pull_var_clause_internal: Maximum recursion depth (%d) exceeded, "
+         "stopping recursion",
+         MAX_RECURSION_DEPTH);
+    return NIL;
   }
-  
+
   /* Check for circular references by comparing node pointers */
-  foreach(lc, visited_nodes)
-  {
-      if (lfirst(lc) == node)
-      {
-          elog(DEBUG1, "fdw_pull_var_clause_internal: Circular reference detected, stopping recursion");
-          return NIL;
-      }
+  foreach (lc, visited_nodes) {
+    if (lfirst(lc) == node) {
+      elog(DEBUG1, "fdw_pull_var_clause_internal: Circular reference detected, "
+                   "stopping recursion");
+      return NIL;
+    }
   }
-  
-  elog(DEBUG2, "fdw_pull_var_clause_internal: Processing node type %d (%s) at depth %d",
+
+  elog(DEBUG2,
+       "fdw_pull_var_clause_internal: Processing node type %d (%s) at depth %d",
        (int)nodeTag(node), tagTypeToString(nodeTag(node)), depth);
 
   /* Handle RestrictInfo nodes by extracting their clause */
-  if (IsA(node, RestrictInfo))
-  {
-      RestrictInfo *restrictinfo = (RestrictInfo *) node;
-      elog(DEBUG1, "fdw_pull_var_clause_internal: Found RestrictInfo node, extracting clause");
-      
-      if (restrictinfo->clause)
-      {
-          /* Add current node to visited list to prevent circular references */
-          List *new_visited = lappend(visited_nodes, node);
-          
-          /* Recursively process the clause inside the RestrictInfo */
-          result = fdw_pull_var_clause_internal((Node *) restrictinfo->clause, flags, depth + 1, new_visited);
-          
-          /* Clean up the visited list (remove our addition) */
-          list_delete_ptr(new_visited, node);
-          
-          return result;
-      }
-      else
-      {
-          elog(DEBUG1, "fdw_pull_var_clause_internal: RestrictInfo has NULL clause");
-          return NIL;
-      }
+  if (IsA(node, RestrictInfo)) {
+    RestrictInfo *restrictinfo = (RestrictInfo *)node;
+    elog(DEBUG1, "fdw_pull_var_clause_internal: Found RestrictInfo node, "
+                 "extracting clause");
+
+    if (restrictinfo->clause) {
+      /* Add current node to visited list to prevent circular references */
+      List *new_visited = lappend(visited_nodes, node);
+
+      /* Recursively process the clause inside the RestrictInfo */
+      result = fdw_pull_var_clause_internal((Node *)restrictinfo->clause, flags,
+                                            depth + 1, new_visited);
+
+      /* Clean up the visited list (remove our addition) */
+      list_delete_ptr(new_visited, node);
+
+      return result;
+    } else {
+      elog(DEBUG1,
+           "fdw_pull_var_clause_internal: RestrictInfo has NULL clause");
+      return NIL;
+    }
   }
 
   /* For all other node types, use the standard pull_var_clause */
   PG_TRY();
   {
-      result = pull_var_clause(node, flags);
-      elog(DEBUG2, "fdw_pull_var_clause_internal: Successfully processed non-RestrictInfo node");
+    result = pull_var_clause(node, flags);
+    elog(DEBUG2, "fdw_pull_var_clause_internal: Successfully processed "
+                 "non-RestrictInfo node");
   }
   PG_CATCH();
   {
-      ErrorData *edata;
-      MemoryContext oldcontext;
-      
-      oldcontext = MemoryContextSwitchTo(ErrorContext);
-      edata = CopyErrorData();
-      MemoryContextSwitchTo(oldcontext);
-      
-      elog(ERROR, "fdw_pull_var_clause_internal: Unexpected error processing node type %d (%s) - %s",
-           (int)nodeTag(node), tagTypeToString(nodeTag(node)), edata->message);
-      
-      FlushErrorState();
-      PG_RE_THROW();
+    ErrorData *edata;
+    MemoryContext oldcontext;
+
+    oldcontext = MemoryContextSwitchTo(ErrorContext);
+    edata = CopyErrorData();
+    MemoryContextSwitchTo(oldcontext);
+
+    elog(ERROR,
+         "fdw_pull_var_clause_internal: Unexpected error processing node type "
+         "%d (%s) - %s",
+         (int)nodeTag(node), tagTypeToString(nodeTag(node)), edata->message);
+
+    FlushErrorState();
+    PG_RE_THROW();
   }
   PG_END_TRY();
-  
+
   return result;
 }
 #endif
 
-/* DEBUG: Safe wrapper for pull_var_clause to catch PostgreSQL v16+ compatibility issues */
-List *safe_pull_var_clause(Node *node, int flags, const char *context)
-{
-    List *result = NULL;
-    
-    if (!node) {
-        elog(DEBUG1, "safe_pull_var_clause: NULL node passed from %s", context);
-        return NIL;
-    }
-    
-    elog(DEBUG1, "safe_pull_var_clause: Called from %s, node type: %d (%s)",
-         context, (int)nodeTag(node), tagTypeToString(nodeTag(node)));
-    
-    PG_TRY();
-    {
-        result = pull_var_clause(node, flags);
-        elog(DEBUG2, "safe_pull_var_clause: Successfully processed node from %s", context);
-    }
-    PG_CATCH();
-    {
-        ErrorData *edata;
-        MemoryContext oldcontext;
-        
-        oldcontext = MemoryContextSwitchTo(ErrorContext);
-        edata = CopyErrorData();
-        MemoryContextSwitchTo(oldcontext);
-        
-        elog(ERROR, "safe_pull_var_clause: PostgreSQL v16+ compatibility error from %s - %s (SQLSTATE: %s, node type: %d (%s))",
-             context, edata->message, edata->sqlerrcode ? unpack_sql_state(edata->sqlerrcode) : "unknown",
-             (int)nodeTag(node), tagTypeToString(nodeTag(node)));
-        
-        FlushErrorState();
-        PG_RE_THROW();
-    }
-    PG_END_TRY();
-    
-    return result;
+/* DEBUG: Safe wrapper for pull_var_clause to catch PostgreSQL v16+
+ * compatibility issues */
+List *safe_pull_var_clause(Node *node, int flags, const char *context) {
+  List *result = NULL;
+
+  if (!node) {
+    elog(DEBUG1, "safe_pull_var_clause: NULL node passed from %s", context);
+    return NIL;
+  }
+
+  elog(DEBUG1, "safe_pull_var_clause: Called from %s, node type: %d (%s)",
+       context, (int)nodeTag(node), tagTypeToString(nodeTag(node)));
+
+  PG_TRY();
+  {
+#if PG_VERSION_NUM >= 160000
+    /* For PostgreSQL v16+, use our custom function that handles RestrictInfo
+     * nodes */
+    result = fdw_pull_var_clause(node, flags);
+    elog(DEBUG2,
+         "safe_pull_var_clause: Successfully processed node from %s using "
+         "fdw_pull_var_clause",
+         context);
+#else
+    /* For PostgreSQL v15 and earlier, use the standard function */
+    result = pull_var_clause(node, flags);
+    elog(DEBUG2,
+         "safe_pull_var_clause: Successfully processed node from %s using "
+         "pull_var_clause",
+         context);
+#endif
+  }
+  PG_CATCH();
+  {
+    ErrorData *edata;
+    MemoryContext oldcontext;
+
+    oldcontext = MemoryContextSwitchTo(ErrorContext);
+    edata = CopyErrorData();
+    MemoryContextSwitchTo(oldcontext);
+
+    elog(ERROR,
+         "safe_pull_var_clause: PostgreSQL v16+ compatibility error from %s - "
+         "%s (SQLSTATE: %s, node type: %d (%s))",
+         context, edata->message,
+         edata->sqlerrcode ? unpack_sql_state(edata->sqlerrcode) : "unknown",
+         (int)nodeTag(node), tagTypeToString(nodeTag(node)));
+
+    FlushErrorState();
+    PG_RE_THROW();
+  }
+  PG_END_TRY();
+
+  return result;
 }
 
-List *
-deserializeDeparsedSortGroup(List *items)
-{
+List *deserializeDeparsedSortGroup(List *items) {
   List *result = NIL;
   ListCell *k;
 
-  foreach (k, items)
-  {
+  foreach (k, items) {
     ListCell *lc;
-    FdwDeparsedSortGroup *key =
-        palloc0(sizeof(FdwDeparsedSortGroup));
+    FdwDeparsedSortGroup *key = palloc0(sizeof(FdwDeparsedSortGroup));
 
+    List *list = lfirst(k);
 
-  List *list = lfirst(k);
+    lc = list_head(lfirst(k));
+    key->attname = (Name)strdup(strVal(lfirst(lc)));
 
-  		lc = list_head(lfirst(k));
-  		key->attname = (Name) strdup(strVal(lfirst(lc)));
+    lc = lnext(list, lc);
+    key->attnum = (int)intVal(lfirst(lc));
 
-  		lc = lnext(list, lc);
-  		key->attnum = (int) intVal(lfirst(lc));
+    lc = lnext(list, lc);
+    key->reversed = (bool)intVal(lfirst(lc));
 
-  		lc = lnext(list, lc);
-  		key->reversed = (bool) intVal(lfirst(lc));
+    lc = lnext(list, lc);
+    key->nulls_first = (bool)intVal(lfirst(lc));
 
-  		lc = lnext(list, lc);
-  		key->nulls_first = (bool) intVal(lfirst(lc));
+    lc = lnext(list, lc);
+    if (lfirst(lc) != NULL)
+      key->collate = (Name)strdup(strVal(lfirst(lc)));
+    else
+      key->collate = NULL;
 
-  		lc = lnext(list, lc);
-  		if(lfirst(lc) != NULL)
-  			key->collate = (Name) strdup(strVal(lfirst(lc)));
-  		else
-  			key->collate = NULL;
+    lc = lnext(list, lc);
+    key->key = (PathKey *)lfirst(lc);
 
-  		lc = lnext(list, lc);
-  		key->key = (PathKey *) lfirst(lc);
+    result = lappend(result, key);
+  }
 
-  		result = lappend(result, key);
-  	}
-
-  	return result;
-
+  return result;
 }
