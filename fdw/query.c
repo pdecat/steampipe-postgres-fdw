@@ -679,70 +679,6 @@ List *serializeDeparsedSortGroup(List *pathkeys) {
   return result;
 }
 
-#if PG_VERSION_NUM >= 160000
-/* PostgreSQL v16+ compatibility: Simple RestrictInfo handling in
- * safe_pull_var_clause */
-#endif
-
-/* DEBUG: Safe wrapper for pull_var_clause to catch PostgreSQL v16+
- * compatibility issues */
-List *safe_pull_var_clause(Node *node, int flags, const char *context) {
-  List *result = NULL;
-
-  if (!node) {
-    elog(DEBUG1, "safe_pull_var_clause: NULL node passed from %s", context);
-    return NIL;
-  }
-
-  elog(DEBUG1, "safe_pull_var_clause: Called from %s, node type: %d (%s)",
-       context, (int)nodeTag(node), tagTypeToString(nodeTag(node)));
-
-  PG_TRY();
-  {
-#if PG_VERSION_NUM >= 160000
-    /* For PostgreSQL v16+, handle RestrictInfo nodes by extracting their clause
-     */
-    Node *processed_node = node;
-    if (IsA(node, RestrictInfo)) {
-      RestrictInfo *restrictinfo = (RestrictInfo *)node;
-      elog(DEBUG1,
-           "safe_pull_var_clause: Found RestrictInfo node, extracting clause");
-      processed_node = (Node *)restrictinfo->clause;
-    }
-    result = pull_var_clause(processed_node, flags);
-    elog(DEBUG2, "safe_pull_var_clause: Successfully processed node from %s",
-         context);
-#else
-    /* For PostgreSQL v15 and earlier, use the standard function */
-    result = pull_var_clause(node, flags);
-    elog(DEBUG2, "safe_pull_var_clause: Successfully processed node from %s",
-         context);
-#endif
-  }
-  PG_CATCH();
-  {
-    ErrorData *edata;
-    MemoryContext oldcontext;
-
-    oldcontext = MemoryContextSwitchTo(ErrorContext);
-    edata = CopyErrorData();
-    MemoryContextSwitchTo(oldcontext);
-
-    elog(ERROR,
-         "safe_pull_var_clause: PostgreSQL v16+ compatibility error from %s - "
-         "%s (SQLSTATE: %s, node type: %d (%s))",
-         context, edata->message,
-         edata->sqlerrcode ? unpack_sql_state(edata->sqlerrcode) : "unknown",
-         (int)nodeTag(node), tagTypeToString(nodeTag(node)));
-
-    FlushErrorState();
-    PG_RE_THROW();
-  }
-  PG_END_TRY();
-
-  return result;
-}
-
 List *deserializeDeparsedSortGroup(List *items) {
   List *result = NIL;
   ListCell *k;
@@ -776,6 +712,79 @@ List *deserializeDeparsedSortGroup(List *items) {
 
     result = lappend(result, key);
   }
+
+  return result;
+}
+
+#if PG_VERSION_NUM >= 160000
+/* PostgreSQL v16+ compatibility: Simple RestrictInfo handling in
+ * safe_pull_var_clause */
+#endif
+
+/* DEBUG: Safe wrapper for pull_var_clause to catch PostgreSQL v16+
+ * compatibility issues */
+List *safe_pull_var_clause(Node *node, int flags, const char *context) {
+  List *result = NULL;
+
+  if (!node) {
+    elog(DEBUG1, "safe_pull_var_clause: NULL node passed from %s", context);
+    return NIL;
+  }
+
+  elog(DEBUG1, "safe_pull_var_clause: Called from %s, node type: %d (%s)",
+       context, (int)nodeTag(node), tagTypeToString(nodeTag(node)));
+
+  PG_TRY();
+  {
+#if PG_VERSION_NUM >= 160000
+    /* For PostgreSQL v16+, handle RestrictInfo nodes by extracting their clause
+     * Keep extracting until we get to a non-RestrictInfo node */
+    Node *processed_node = node;
+    int depth = 0;
+    while (IsA(processed_node, RestrictInfo) && depth < 10) {
+      RestrictInfo *restrictinfo = (RestrictInfo *)processed_node;
+      elog(DEBUG1,
+           "safe_pull_var_clause: Found RestrictInfo node at depth %d, "
+           "extracting clause",
+           depth);
+      if (restrictinfo->clause) {
+        processed_node = (Node *)restrictinfo->clause;
+        depth++;
+      } else {
+        elog(DEBUG1, "safe_pull_var_clause: RestrictInfo has NULL clause");
+        return NIL;
+      }
+    }
+
+    if (depth >= 10) {
+      elog(WARNING,
+           "safe_pull_var_clause: Too many nested RestrictInfo nodes, stopping "
+           "at depth %d",
+           depth);
+      return NIL;
+    }
+
+    result = pull_var_clause(processed_node, flags);
+    elog(DEBUG2,
+         "safe_pull_var_clause: Successfully processed node from %s after %d "
+         "RestrictInfo extractions",
+         context, depth);
+#else
+    /* For PostgreSQL v15 and earlier, use the standard function */
+    result = pull_var_clause(node, flags);
+    elog(DEBUG2, "safe_pull_var_clause: Successfully processed node from %s",
+         context);
+#endif
+  }
+  PG_CATCH();
+  {
+    /* Simple error handling without memory allocation */
+    elog(ERROR,
+         "safe_pull_var_clause: PostgreSQL v16+ compatibility error from %s - "
+         "node type: %d (%s)",
+         context, (int)nodeTag(node), tagTypeToString(nodeTag(node)));
+  }
+  PG_END_TRY();
 
   return result;
 }
