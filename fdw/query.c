@@ -165,6 +165,10 @@ unnestClause(Node *node)
     return (Node *)((RelabelType *)node)->arg;
   case T_ArrayCoerceExpr:
     return (Node *)((ArrayCoerceExpr *)node)->arg;
+#if PG_VERSION_NUM >= 160000
+  case T_RestrictInfo:
+    return (Node *)((RestrictInfo *)node)->clause;
+#endif
   default:
     return node;
   }
