@@ -51,18 +51,41 @@ static List *safe_pull_var_clause(Node *node, int flags);
 static List *
 safe_pull_var_clause(Node *node, int flags)
 {
-  elog(DEBUG1, "DEBUG: safe_pull_var_clause invoked for node (nodeTag=%d)", nodeTag(node));
   if (node == NULL)
     return NIL;
-    
+
+  elog(DEBUG1, "DEBUG: safe_pull_var_clause invoked for node (nodeTag=%d)", nodeTag(node));
+
+  /* Add safety check for corrupted nodes */
+  if (nodeTag(node) < 0 || nodeTag(node) > 1000)
+  {
+    elog(WARNING, "DEBUG: Potentially corrupted node with invalid nodeTag=%d, returning NIL", nodeTag(node));
+    return NIL;
+  }
+
   /* If this is a RestrictInfo node, extract the clause */
   if (IsA(node, RestrictInfo))
   {
     RestrictInfo *restrictinfo = (RestrictInfo *)node;
-    elog(DEBUG1, "DEBUG: safe_pull_var_clause extracting clause from RestrictInfo (clause nodeTag=%d)", nodeTag((Node *)restrictinfo->clause));
-    return pull_var_clause((Node *)restrictinfo->clause, flags);
+    Node *clause = (Node *)restrictinfo->clause;
+
+    /* Safety checks */
+    if (clause == NULL)
+    {
+      elog(WARNING, "DEBUG: RestrictInfo has NULL clause, returning NIL");
+      return NIL;
+    }
+
+    if (IsA(clause, RestrictInfo))
+    {
+      elog(WARNING, "DEBUG: RestrictInfo contains nested RestrictInfo (nodeTag=%d), avoiding recursion", nodeTag(clause));
+      return NIL;  /* Avoid infinite recursion */
+    }
+
+    elog(DEBUG1, "DEBUG: safe_pull_var_clause extracting clause from RestrictInfo (clause nodeTag=%d)", nodeTag(clause));
+    return pull_var_clause(clause, flags);
   }
-  
+
   /* For all other node types, call pull_var_clause directly */
   return pull_var_clause(node, flags);
 }
@@ -97,18 +120,28 @@ extractColumns(List *reltargetlist, List *restrictinfolist)
     columns = list_union(columns, targetcolumns);
     i++;
   }
-  foreach (lc, restrictinfolist)
+  /* Use extract_actual_clauses to properly handle RestrictInfo nodes */
+  if (restrictinfolist != NIL)
   {
-    List *targetcolumns;
-    RestrictInfo *node = (RestrictInfo *)lfirst(lc);
-    elog(DEBUG1, "DEBUG: Processing RestrictInfo in restrictinfo list (clause nodeTag=%d)", nodeTag((Node *)node->clause));
-    targetcolumns = safe_pull_var_clause((Node *)node->clause,
+    List *actual_clauses = extract_actual_clauses(restrictinfolist, false);
+    ListCell *clause_lc;
+
+    elog(DEBUG1, "DEBUG: Processing %d actual clauses from restrictinfo list", list_length(actual_clauses));
+
+    foreach (clause_lc, actual_clauses)
+    {
+      List *targetcolumns;
+      Node *clause = (Node *)lfirst(clause_lc);
+
+      elog(DEBUG1, "DEBUG: Processing actual clause (nodeTag=%d)", nodeTag(clause));
+      targetcolumns = pull_var_clause(clause,
 #if PG_VERSION_NUM >= 90600
-                                         PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
+                                      PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
 #else
-                                         PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
+                                      PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
 #endif
-    columns = list_union(columns, targetcolumns);
+      columns = list_union(columns, targetcolumns);
+    }
   }
   return columns;
 }
@@ -372,22 +405,35 @@ colnameFromVar(Var *var, PlannerInfo *root, FdwPlanState *planstate)
  */
 bool isAttrInRestrictInfo(Index relid, AttrNumber attno, RestrictInfo *restrictinfo)
 {
-  elog(DEBUG1, "DEBUG: isAttrInRestrictInfo calling safe_pull_var_clause (clause nodeTag=%d)", nodeTag((Node *)restrictinfo->clause));
-  List *vars = safe_pull_var_clause((Node *)restrictinfo->clause,
-#if PG_VERSION_NUM >= 90600
-                                    PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
-#else
-                                    PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
-#endif
+  List *vars;
   ListCell *lc;
+  List *actual_clauses;
+  ListCell *clause_lc;
 
-  foreach (lc, vars)
+  elog(DEBUG1, "DEBUG: isAttrInRestrictInfo using extract_actual_clauses (clause nodeTag=%d)", nodeTag((Node *)restrictinfo->clause));
+
+  /* Use extract_actual_clauses to properly handle RestrictInfo */
+  actual_clauses = extract_actual_clauses(list_make1(restrictinfo), false);
+
+  foreach (clause_lc, actual_clauses)
   {
-    Var *var = (Var *)lfirst(lc);
+    Node *clause = (Node *)lfirst(clause_lc);
 
-    if (var->varno == relid && var->varattno == attno)
+    vars = pull_var_clause(clause,
+#if PG_VERSION_NUM >= 90600
+                           PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
+#else
+                           PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
+#endif
+
+    foreach (lc, vars)
     {
-      return true;
+      Var *var = (Var *)lfirst(lc);
+
+      if (var->varno == relid && var->varattno == attno)
+      {
+        return true;
+      }
     }
   }
   return false;
