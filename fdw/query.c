@@ -41,54 +41,6 @@ List *clausesInvolvingAttr(Index relid, AttrNumber attnum,
 
 Expr *fdw_get_em_expr(EquivalenceClass *ec, RelOptInfo *rel);
 
-/* Safe wrapper for pull_var_clause that handles RestrictInfo nodes */
-static List *safe_pull_var_clause(Node *node, int flags);
-
-/*
- * Safe wrapper for pull_var_clause that handles RestrictInfo nodes
- * This ensures we never pass RestrictInfo nodes to PostgreSQL's pull_var_clause
- */
-static List *
-safe_pull_var_clause(Node *node, int flags)
-{
-  if (node == NULL)
-    return NIL;
-
-  elog(DEBUG1, "DEBUG: safe_pull_var_clause invoked for node (nodeTag=%d)", nodeTag(node));
-
-  /* Add safety check for corrupted nodes */
-  if (nodeTag(node) < 0 || nodeTag(node) > 1000)
-  {
-    elog(WARNING, "DEBUG: Potentially corrupted node with invalid nodeTag=%d, returning NIL", nodeTag(node));
-    return NIL;
-  }
-
-  /* If this is a RestrictInfo node, extract the clause */
-  if (IsA(node, RestrictInfo))
-  {
-    RestrictInfo *restrictinfo = (RestrictInfo *)node;
-    Node *clause = (Node *)restrictinfo->clause;
-
-    /* Safety checks */
-    if (clause == NULL)
-    {
-      elog(WARNING, "DEBUG: RestrictInfo has NULL clause, returning NIL");
-      return NIL;
-    }
-
-    if (IsA(clause, RestrictInfo))
-    {
-      elog(WARNING, "DEBUG: RestrictInfo contains nested RestrictInfo (nodeTag=%d), avoiding recursion", nodeTag(clause));
-      return NIL;  /* Avoid infinite recursion */
-    }
-
-    elog(DEBUG1, "DEBUG: safe_pull_var_clause extracting clause from RestrictInfo (clause nodeTag=%d)", nodeTag(clause));
-    return pull_var_clause(clause, flags);
-  }
-
-  /* For all other node types, call pull_var_clause directly */
-  return pull_var_clause(node, flags);
-}
 
 /*
  * The list of needed columns (represented by their respective vars)
@@ -108,16 +60,37 @@ extractColumns(List *reltargetlist, List *restrictinfolist)
     List *targetcolumns;
     Node *node = (Node *)lfirst(lc);
 
-    /* Handle RestrictInfo nodes in target list for PostgreSQL v16+
-     * compatibility */
     elog(DEBUG1, "DEBUG: Processing node in target list (nodeTag=%d)", nodeTag(node));
-    targetcolumns = safe_pull_var_clause(node,
+    
+    /* Check if this is a RestrictInfo node and handle it properly */
+    if (IsA(node, RestrictInfo))
+    {
+      List *actual_clauses = extract_actual_clauses(list_make1(node), false);
+      ListCell *clause_lc;
+      
+      foreach (clause_lc, actual_clauses)
+      {
+        Node *clause = (Node *)lfirst(clause_lc);
+        List *clause_vars = pull_var_clause(clause,
 #if PG_VERSION_NUM >= 90600
-                                        PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
+                                           PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
 #else
-                                        PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
+                                           PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
 #endif
-    columns = list_union(columns, targetcolumns);
+        columns = list_union(columns, clause_vars);
+      }
+    }
+    else
+    {
+      /* For non-RestrictInfo nodes, call pull_var_clause directly */
+      targetcolumns = pull_var_clause(node,
+#if PG_VERSION_NUM >= 90600
+                                      PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
+#else
+                                      PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
+#endif
+      columns = list_union(columns, targetcolumns);
+    }
     i++;
   }
   /* Use extract_actual_clauses to properly handle RestrictInfo nodes */
