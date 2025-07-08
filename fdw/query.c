@@ -53,23 +53,30 @@ List *extractColumns(List *reltargetlist, List *restrictinfolist) {
   List *columns = NULL;
   int i = 0;
 
-  /* DEBUG: Log PostgreSQL version information for compatibility debugging */
-  elog(DEBUG1,
-       "extractColumns: PostgreSQL compile-time version: %d, restrictinfolist "
-       "length: %d",
-       PG_VERSION_NUM, list_length(restrictinfolist));
-
   foreach (lc, reltargetlist) {
     List *targetcolumns;
     Node *node = (Node *)lfirst(lc);
 
-    targetcolumns =
-        pull_var_clause(node,
+    /* Handle RestrictInfo nodes in target list for PostgreSQL v16+
+     * compatibility */
+    if (IsA(node, RestrictInfo)) {
+      RestrictInfo *restrictinfo = (RestrictInfo *)node;
+      targetcolumns =
+          pull_var_clause((Node *)restrictinfo->clause,
 #if PG_VERSION_NUM >= 90600
-                        PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
+                          PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
 #else
-                        PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
+                          PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
 #endif
+    } else {
+      targetcolumns =
+          pull_var_clause(node,
+#if PG_VERSION_NUM >= 90600
+                          PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
+#else
+                          PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
+#endif
+    }
     columns = list_union(columns, targetcolumns);
     i++;
   }
@@ -77,21 +84,6 @@ List *extractColumns(List *reltargetlist, List *restrictinfolist) {
     List *targetcolumns;
     RestrictInfo *node = (RestrictInfo *)lfirst(lc);
 
-    /* DEBUG: Log node type information for PostgreSQL v16+ compatibility */
-    NodeTag clause_type = nodeTag((Node *)node->clause);
-    elog(DEBUG1,
-         "extractColumns: Processing RestrictInfo node, clause type: %d (%s), "
-         "PostgreSQL version: %d",
-         (int)clause_type, tagTypeToString(clause_type), PG_VERSION_NUM);
-
-    /* DEBUG: Log the node structure for debugging */
-    if (node->clause) {
-      elog(DEBUG2, "extractColumns: RestrictInfo clause nodeToString: %s",
-           nodeToString((Node *)node->clause));
-    }
-
-    /* PostgreSQL v16+ compatibility: Extract clause from RestrictInfo before
-     * processing */
     targetcolumns =
         pull_var_clause((Node *)node->clause,
 #if PG_VERSION_NUM >= 90600
@@ -326,22 +318,8 @@ Value *colnameFromVar(Var *var, PlannerInfo *root, FdwPlanState *planstate) {
  */
 bool isAttrInRestrictInfo(Index relid, AttrNumber attno,
                           RestrictInfo *restrictinfo) {
-  /* DEBUG: Log RestrictInfo processing for PostgreSQL v16+ compatibility */
-  NodeTag clause_type = nodeTag((Node *)restrictinfo->clause);
-  elog(DEBUG1,
-       "isAttrInRestrictInfo: Processing RestrictInfo for relid %d, attno %d, "
-       "clause type: %d (%s)",
-       relid, attno, (int)clause_type, tagTypeToString(clause_type));
-
-  /* DEBUG: Additional logging for the clause structure */
-  if (restrictinfo->clause) {
-    elog(DEBUG2, "isAttrInRestrictInfo: RestrictInfo clause nodeToString: %s",
-         nodeToString((Node *)restrictinfo->clause));
-  }
-
   List *vars;
 
-  /* PostgreSQL v16+ compatibility: Handle RestrictInfo nodes properly */
   /* Use pull_var_clause directly on the clause from RestrictInfo */
   vars = pull_var_clause((Node *)restrictinfo->clause,
 #if PG_VERSION_NUM >= 90600
