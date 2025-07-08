@@ -239,8 +239,9 @@ canonicalOpExpr(OpExpr *opExpr, Relids base_relids)
     l = unnestClause(list_nth(opExpr->args, 0));
     r = unnestClause(list_nth(opExpr->args, 1));
 
-    elog(DEBUG5, "l arg: %s", nodeToString(l));
-    elog(DEBUG5, "r arg: %s", nodeToString(r));
+    /* Temporarily disable nodeToString calls to avoid RestrictInfo issues */
+    elog(DEBUG5, "l arg: [nodeToString disabled for debugging]");
+    elog(DEBUG5, "r arg: [nodeToString disabled for debugging]");
 
     swapOperandsAsNeeded(&l, &r, &operatorid, base_relids);
 
