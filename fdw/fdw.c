@@ -4,8 +4,8 @@
 #include "fdw_handlers.h"
 #include "nodes/plannodes.h"
 #include "access/xact.h"
-#include "utils/guc.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
 #include "tcop/tcopprot.h"
 
 extern PGDLLEXPORT void _PG_init(void);
@@ -30,7 +30,7 @@ PG_MODULE_MAGIC;
 
 // Define the handler function for signal 16
 void signal_handler(int sig) {
-//    elog(NOTICE, "Caught signal %d", sig);
+  //    elog(NOTICE, "Caught signal %d", sig);
 }
 
 /*
@@ -38,50 +38,45 @@ void signal_handler(int sig) {
  * 		Library load-time initalization.
  * 		Sets exitHook() callback for backend shutdown.
  */
-void _PG_init(void)
-{
-    // TACTICAL
-    // certain postgres errors (`out of shared memory`, `schema already exists`)
-    // sometimes in a signal 16 being sent from the C code
-    // this sometimes causes a crash as the signal handler is not set up correctly for Go (SA_ONSTACK is not set)
-    // To avoid this, handle the signal directly and swallow it
+void _PG_init(void) {
+  // TACTICAL
+  // certain postgres errors (`out of shared memory`, `schema already exists`)
+  // sometimes in a signal 16 being sent from the C code
+  // this sometimes causes a crash as the signal handler is not set up correctly
+  // for Go (SA_ONSTACK is not set) To avoid this, handle the signal directly
+  // and swallow it
 
-    struct sigaction sa;
+  struct sigaction sa;
 
-    // Clear the sigaction structure
-    memset(&sa, 0, sizeof(sa));
+  // Clear the sigaction structure
+  memset(&sa, 0, sizeof(sa));
 
-    // Set the pointer to the handler function
-    sa.sa_handler = signal_handler;
+  // Set the pointer to the handler function
+  sa.sa_handler = signal_handler;
 
-    // Set the SA_ONSTACK flag to ensure the handler runs on a separate stack
-    sa.sa_flags = SA_ONSTACK;
+  // Set the SA_ONSTACK flag to ensure the handler runs on a separate stack
+  sa.sa_flags = SA_ONSTACK;
 
-    // Block other signals while handling
-    sigfillset(&sa.sa_mask);
+  // Block other signals while handling
+  sigfillset(&sa.sa_mask);
 
-    // Register the signal handler for signal 16
-    if (sigaction(16, &sa, NULL) == -1) {
-        perror("Failed to set signal handler");
-        exit(EXIT_FAILURE);
-    }
-
+  // Register the signal handler for signal 16
+  if (sigaction(16, &sa, NULL) == -1) {
+    perror("Failed to set signal handler");
+    exit(EXIT_FAILURE);
+  }
 
   /* register an exit hook */
   on_proc_exit(&exitHook, PointerGetDatum(NULL));
   RegisterXactCallback(pgfdw_xact_callback, NULL);
-
 }
 
 /*
  * pgfdw_xact_callback gets called when a running
  * query is cancelled
  */
-static void
-pgfdw_xact_callback(XactEvent event, void *arg)
-{
-  if (event == XACT_EVENT_ABORT)
-  {
+static void pgfdw_xact_callback(XactEvent event, void *arg) {
+  if (event == XACT_EVENT_ABORT) {
     goFdwAbortCallback();
   }
 }
@@ -91,136 +86,145 @@ pgfdw_xact_callback(XactEvent event, void *arg)
  * 		Close all Oracle connections on process exit.
  */
 
-void exitHook(int code, Datum arg)
-{
-  goFdwShutdown();
-}
+void exitHook(int code, Datum arg) { goFdwShutdown(); }
 
-static bool fdwIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte) {
-	return getenv("STEAMPIPE_FDW_PARALLEL_SAFE") != NULL;
+static bool fdwIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel,
+                                         RangeTblEntry *rte) {
+  return getenv("STEAMPIPE_FDW_PARALLEL_SAFE") != NULL;
 }
 
 /*
  * Extract OpenTelemetry trace context from PostgreSQL session variables
- * Returns a formatted string containing traceparent and tracestate, or NULL if not set
+ * Returns a formatted string containing traceparent and tracestate, or NULL if
+ * not set
  */
-static char *extractTraceContextFromSession(void)
-{
-    const char *traceparent = GetConfigOption("steampipe.traceparent", true, false);
-    const char *tracestate = GetConfigOption("steampipe.tracestate", true, false);
-    char *result = NULL;
+static char *extractTraceContextFromSession(void) {
+  const char *traceparent =
+      GetConfigOption("steampipe.traceparent", true, false);
+  const char *tracestate = GetConfigOption("steampipe.tracestate", true, false);
+  char *result = NULL;
 
-    // Format the result string for Go layer consumption
-    if (traceparent != NULL) {
-        if (tracestate != NULL) {
-            result = psprintf("traceparent=%s;tracestate=%s", traceparent, tracestate);
-        } else {
-            result = psprintf("traceparent=%s", traceparent);
-        }
-
-        elog(DEBUG1, "extracted trace context: %s", result);
+  // Format the result string for Go layer consumption
+  if (traceparent != NULL) {
+    if (tracestate != NULL) {
+      result =
+          psprintf("traceparent=%s;tracestate=%s", traceparent, tracestate);
     } else {
-        elog(DEBUG2, "no trace context found in session variables");
+      result = psprintf("traceparent=%s", traceparent);
     }
 
-    return result;
+    elog(DEBUG1, "extracted trace context: %s", result);
+  } else {
+    elog(DEBUG2, "no trace context found in session variables");
+  }
+
+  return result;
 }
 
 /*
- * Extract OpenTelemetry trace context from SQL query comments (SQLcommenter format)
- * Parses comments like: /*traceparent='00-...',tracestate='rojo=...'*\/
- * Returns a formatted string containing traceparent and tracestate, or NULL if not found
+ * Extract OpenTelemetry trace context from SQL query comments (SQLcommenter
+ * format) Parses comments like: /*traceparent='00-...',tracestate='rojo=...'*\/
+ * Returns a formatted string containing traceparent and tracestate, or NULL if
+ * not found
  */
-static char *extractTraceContextFromQueryComments(void)
-{
-    const char *query_string = debug_query_string;
-    char *result = NULL;
-    char *traceparent = NULL;
-    char *tracestate = NULL;
+static char *extractTraceContextFromQueryComments(void) {
+  const char *query_string = debug_query_string;
+  char *result = NULL;
+  char *traceparent = NULL;
+  char *tracestate = NULL;
 
-    if (query_string == NULL) {
-        elog(DEBUG2, "no query string available for SQLcommenter parsing");
-        return NULL;
+  if (query_string == NULL) {
+    elog(DEBUG2, "no query string available for SQLcommenter parsing");
+    return NULL;
+  }
+
+  elog(DEBUG2, "parsing SQLcommenter from query: %.100s...", query_string);
+
+  // Look for SQL comments in the format /*...*/
+  const char *comment_start = strstr(query_string, "/*");
+  while (comment_start != NULL) {
+    const char *comment_end = strstr(comment_start, "*/");
+    if (comment_end == NULL) {
+      break; // Malformed comment, skip
     }
 
-    elog(DEBUG2, "parsing SQLcommenter from query: %.100s...", query_string);
+    // Extract the comment content
+    size_t comment_len = comment_end - comment_start - 2; // Exclude /* and */
+    char *comment_content = palloc(comment_len + 1);
+    strncpy(comment_content, comment_start + 2, comment_len);
+    comment_content[comment_len] = '\0';
 
-    // Look for SQL comments in the format /*...*/
-    const char *comment_start = strstr(query_string, "/*");
-    while (comment_start != NULL) {
-        const char *comment_end = strstr(comment_start, "*/");
-        if (comment_end == NULL) {
-            break; // Malformed comment, skip
+    elog(DEBUG2, "found SQL comment: %s", comment_content);
+
+    // Parse key-value pairs in the comment
+    char *token = strtok(comment_content, ",");
+    while (token != NULL) {
+      // Trim whitespace
+      while (*token == ' ' || *token == '\t')
+        token++;
+
+      // Look for traceparent or tracestate
+      if (strncmp(token, "traceparent=", 12) == 0) {
+        char *value = token + 12;
+        // Remove quotes if present
+        if (*value == '\'' || *value == '"') {
+          char quote_char = *value;
+          value++;
+          char *end_quote = strrchr(value, quote_char);
+          if (end_quote)
+            *end_quote = '\0';
         }
-
-        // Extract the comment content
-        size_t comment_len = comment_end - comment_start - 2; // Exclude /* and */
-        char *comment_content = palloc(comment_len + 1);
-        strncpy(comment_content, comment_start + 2, comment_len);
-        comment_content[comment_len] = '\0';
-
-        elog(DEBUG2, "found SQL comment: %s", comment_content);
-
-        // Parse key-value pairs in the comment
-        char *token = strtok(comment_content, ",");
-        while (token != NULL) {
-            // Trim whitespace
-            while (*token == ' ' || *token == '\t') token++;
-
-            // Look for traceparent or tracestate
-            if (strncmp(token, "traceparent=", 12) == 0) {
-                char *value = token + 12;
-                // Remove quotes if present
-                if (*value == '\'' || *value == '"') {
-                    char quote_char = *value;
-                    value++;
-                    char *end_quote = strrchr(value, quote_char);
-                    if (end_quote) *end_quote = '\0';
-                }
-                if (traceparent) pfree(traceparent);
-                traceparent = pstrdup(value);
-                elog(DEBUG2, "extracted traceparent from SQLcommenter: %s", traceparent);
-            } else if (strncmp(token, "tracestate=", 11) == 0) {
-                char *value = token + 11;
-                // Remove quotes if present
-                if (*value == '\'' || *value == '"') {
-                    char quote_char = *value;
-                    value++;
-                    char *end_quote = strrchr(value, quote_char);
-                    if (end_quote) *end_quote = '\0';
-                }
-                if (tracestate) pfree(tracestate);
-                tracestate = pstrdup(value);
-                elog(DEBUG2, "extracted tracestate from SQLcommenter: %s", tracestate);
-            }
-
-            token = strtok(NULL, ",");
+        if (traceparent)
+          pfree(traceparent);
+        traceparent = pstrdup(value);
+        elog(DEBUG2, "extracted traceparent from SQLcommenter: %s",
+             traceparent);
+      } else if (strncmp(token, "tracestate=", 11) == 0) {
+        char *value = token + 11;
+        // Remove quotes if present
+        if (*value == '\'' || *value == '"') {
+          char quote_char = *value;
+          value++;
+          char *end_quote = strrchr(value, quote_char);
+          if (end_quote)
+            *end_quote = '\0';
         }
+        if (tracestate)
+          pfree(tracestate);
+        tracestate = pstrdup(value);
+        elog(DEBUG2, "extracted tracestate from SQLcommenter: %s", tracestate);
+      }
 
-        pfree(comment_content);
-
-        // Look for next comment
-        comment_start = strstr(comment_end + 2, "/*");
+      token = strtok(NULL, ",");
     }
 
-    // Format the result string for Go layer consumption
-    if (traceparent != NULL) {
-        if (tracestate != NULL) {
-            result = psprintf("traceparent=%s;tracestate=%s", traceparent, tracestate);
-        } else {
-            result = psprintf("traceparent=%s", traceparent);
-        }
+    pfree(comment_content);
 
-        elog(DEBUG1, "extracted trace context from SQLcommenter: %s", result);
+    // Look for next comment
+    comment_start = strstr(comment_end + 2, "/*");
+  }
+
+  // Format the result string for Go layer consumption
+  if (traceparent != NULL) {
+    if (tracestate != NULL) {
+      result =
+          psprintf("traceparent=%s;tracestate=%s", traceparent, tracestate);
     } else {
-        elog(DEBUG2, "no trace context found in SQL comments");
+      result = psprintf("traceparent=%s", traceparent);
     }
 
-    // Clean up
-    if (traceparent) pfree(traceparent);
-    if (tracestate) pfree(tracestate);
+    elog(DEBUG1, "extracted trace context from SQLcommenter: %s", result);
+  } else {
+    elog(DEBUG2, "no trace context found in SQL comments");
+  }
 
-    return result;
+  // Clean up
+  if (traceparent)
+    pfree(traceparent);
+  if (tracestate)
+    pfree(tracestate);
+
+  return result;
 }
 
 /*
@@ -229,38 +233,34 @@ static char *extractTraceContextFromQueryComments(void)
  * 2. Fall back to SQLcommenter in query comments
  * 3. Return NULL if neither found
  */
-static char *extractTraceContext(void)
-{
-    char *result = NULL;
+static char *extractTraceContext(void) {
+  char *result = NULL;
 
-    // First try session variables (primary method)
-    result = extractTraceContextFromSession();
-    if (result != NULL) {
-        elog(DEBUG1, "using trace context from session variables");
-        return result;
-    }
+  // First try session variables (primary method)
+  result = extractTraceContextFromSession();
+  if (result != NULL) {
+    elog(DEBUG1, "using trace context from session variables");
+    return result;
+  }
 
-    // Fall back to SQLcommenter (secondary method)
-    result = extractTraceContextFromQueryComments();
-    if (result != NULL) {
-        elog(DEBUG1, "using trace context from SQLcommenter");
-        return result;
-    }
+  // Fall back to SQLcommenter (secondary method)
+  result = extractTraceContextFromQueryComments();
+  if (result != NULL) {
+    elog(DEBUG1, "using trace context from SQLcommenter");
+    return result;
+  }
 
-    elog(DEBUG2, "no trace context found in session variables or SQLcommenter");
-    return NULL;
+  elog(DEBUG2, "no trace context found in session variables or SQLcommenter");
+  return NULL;
 }
 
 /*
  * Public wrapper for extractTraceContext - callable from Go
  */
-char *getTraceContext(void)
-{
-    return extractTraceContext();
-}
+char *getTraceContext(void) { return extractTraceContext(); }
 
-static void fdwGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
-{
+static void fdwGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel,
+                                 Oid foreigntableid) {
   FdwPlanState *planstate;
   ForeignTable *ftable;
   ListCell *lc;
@@ -268,25 +268,26 @@ static void fdwGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid for
   bool needWholeRow = false;
 
   // initialise logging`
-  // to set the log level for fdw logging from C code, set log_min_messages in postgresql.conf
+  // to set the log level for fdw logging from C code, set log_min_messages in
+  // postgresql.conf
   goInit();
 
   planstate = palloc0(sizeof(FdwPlanState));
   ftable = GetForeignTable(foreigntableid);
 
-
   // Save plan state information
   baserel->fdw_private = planstate;
   planstate->foreigntableid = foreigntableid;
 
-  // Extract trace context with fallback strategy (session variables -> SQLcommenter)
+  // Extract trace context with fallback strategy (session variables ->
+  // SQLcommenter)
   char *traceContext = extractTraceContext();
   if (traceContext != NULL) {
-      planstate->trace_context_string = pstrdup(traceContext);
-      pfree(traceContext);
-      elog(DEBUG1, "stored trace context in plan state");
+    planstate->trace_context_string = pstrdup(traceContext);
+    pfree(traceContext);
+    elog(DEBUG1, "stored trace context in plan state");
   } else {
-      planstate->trace_context_string = NULL;
+    planstate->trace_context_string = NULL;
   }
 
   // Initialize the conversion info array
@@ -303,22 +304,18 @@ static void fdwGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid for
   }
 
   // Gather the target_list of columns for this query as Value objects.
-  if (needWholeRow)
-  {
+  if (needWholeRow) {
     int i;
-    for (i = 0; i < desc->natts; i++)
-    {
+    for (i = 0; i < desc->natts; i++) {
       Form_pg_attribute att = TupleDescAttr(desc, i);
-      if (!att->attisdropped)
-      {
-        planstate->target_list = lappend(planstate->target_list, makeString(NameStr(att->attname)));
+      if (!att->attisdropped) {
+        planstate->target_list =
+            lappend(planstate->target_list, makeString(NameStr(att->attname)));
       }
     }
-  }
-  else
-  {
-    foreach (lc, extractColumns(baserel->reltarget->exprs, baserel->baserestrictinfo))
-    {
+  } else {
+    foreach (lc, extractColumns(baserel->reltarget->exprs,
+                                baserel->baserestrictinfo)) {
       Var *var = (Var *)lfirst(lc);
 #if PG_VERSION_NUM >= 150000
       String *colname;
@@ -327,8 +324,7 @@ static void fdwGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid for
 #endif
       // Store only a Value node containing the string name of the column.
       colname = colnameFromVar(var, root, planstate);
-      if (colname != NULL && strVal(colname) != NULL)
-      {
+      if (colname != NULL && strVal(colname) != NULL) {
         planstate->target_list = lappend(planstate->target_list, colname);
       }
     }
@@ -338,7 +334,8 @@ static void fdwGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid for
   planstate->limit = deparseLimit(root);
 
   // Inject the "rows" and "width" attribute into the baserel
-  goFdwGetRelSize(planstate, root, &baserel->rows, &baserel->reltarget->width, baserel);
+  goFdwGetRelSize(planstate, root, &baserel->rows, &baserel->reltarget->width,
+                  baserel);
 
   planstate->width = baserel->reltarget->width;
 }
@@ -347,38 +344,33 @@ static void fdwGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid for
  * deparseLimit
  * 		Deparse LIMIT clause to extract the limit count (limit+offset)
  */
-static int deparseLimit(PlannerInfo *root)
-{
+static int deparseLimit(PlannerInfo *root) {
   int limitVal = 0, offsetVal = 0;
 
-  /* don't push down LIMIT if the query has a GROUP BY, DISTINCT, ORDER BY clause or aggregates
-     or if the query refers to more than 1 table */
+  /* don't push down LIMIT if the query has a GROUP BY, DISTINCT, ORDER BY
+     clause or aggregates or if the query refers to more than 1 table */
   if (root->parse->groupClause != NULL ||
-  // NOTE: do not take sort clause into account here. Instead, we determ,ine in the planning phase
-  // whether we can push down all sort fields and if so, we can safely push down the limit
-  //  root->parse->sortClause != NULL ||
-      root->parse->distinctClause != NULL ||
-      root->parse->hasAggs ||
-      root->parse->hasDistinctOn ||
-      bms_num_members(root->all_baserels) != 1)
+      // NOTE: do not take sort clause into account here. Instead, we determ,ine
+      // in the planning phase whether we can push down all sort fields and if
+      // so, we can safely push down the limit
+      //  root->parse->sortClause != NULL ||
+      root->parse->distinctClause != NULL || root->parse->hasAggs ||
+      root->parse->hasDistinctOn || bms_num_members(root->all_baserels) != 1)
     return -1;
 
   /* only push down constant LIMITs that are not NULL */
-  if (root->parse->limitCount != NULL && IsA(root->parse->limitCount, Const))
-  {
+  if (root->parse->limitCount != NULL && IsA(root->parse->limitCount, Const)) {
     Const *limit = (Const *)root->parse->limitCount;
     if (limit->constisnull)
       return -1;
     limitVal = atoi(datumToString(limit->constvalue, limit->consttype));
-  }
-  else
-  {
+  } else {
     return -1;
   }
 
   /* only consider OFFSETS that are non-NULL constants */
-  if (root->parse->limitOffset != NULL && IsA(root->parse->limitOffset, Const))
-  {
+  if (root->parse->limitOffset != NULL &&
+      IsA(root->parse->limitOffset, Const)) {
     Const *offset = (Const *)root->parse->limitOffset;
     if (!offset->constisnull)
       offsetVal = atoi(datumToString(offset->constvalue, offset->consttype));
@@ -390,12 +382,12 @@ static int deparseLimit(PlannerInfo *root)
 /*
  * fdwGetForeignPaths
  *		Create possible access paths for a scan on the foreign table.
- *		This is done by calling the "get_path_keys method on the python side,
- *		and parsing its result to build parameterized paths according to the
+ *		This is done by calling the "get_path_keys method on the python
+ *side, and parsing its result to build parameterized paths according to the
  *		equivalence classes found in the plan.
  */
-static void fdwGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
-{
+static void fdwGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel,
+                               Oid foreigntableid) {
   List *paths; /* List of ForeignPath */
   ListCell *lc;
   FdwPathData *fdw_private;
@@ -403,8 +395,8 @@ static void fdwGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid forei
 
   /* These lists are used to handle sort pushdown */
   List *apply_pathkeys = NULL;
-  fdw_private = (FdwPathData *) palloc(sizeof(FdwPathData));
-  fdw_private->deparsed_pathkeys =  NULL;
+  fdw_private = (FdwPathData *)palloc(sizeof(FdwPathData));
+  fdw_private->deparsed_pathkeys = NULL;
   // default canPushdownAllSortFields to true - this will be set to false
   fdw_private->canPushdownAllSortFields = true;
 
@@ -412,63 +404,58 @@ static void fdwGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid forei
   List *possiblePaths = goFdwGetPathKeys(planstate);
 
   /* Try to find parameterized paths */
-  paths = findPaths(root, baserel, possiblePaths, planstate->startupCost, planstate, apply_pathkeys, fdw_private->deparsed_pathkeys);
+  paths = findPaths(root, baserel, possiblePaths, planstate->startupCost,
+                    planstate, apply_pathkeys, fdw_private->deparsed_pathkeys);
 
   /* Handle sort pushdown */
-  if (root->query_pathkeys)
-  {
+  if (root->query_pathkeys) {
     List *deparsed;
 
     deparsed = deparse_sortgroup(root, foreigntableid, baserel);
-    if (deparsed)
-    {
+    if (deparsed) {
       /* Update the sort_*_pathkeys lists if needed */
-      fdw_private->canPushdownAllSortFields = computeDeparsedSortGroup(deparsed, planstate, &apply_pathkeys, &fdw_private->deparsed_pathkeys);
+      fdw_private->canPushdownAllSortFields =
+          computeDeparsedSortGroup(deparsed, planstate, &apply_pathkeys,
+                                   &fdw_private->deparsed_pathkeys);
     } else {
-        /* deparse_sortgroup failed returns empty list if no pathkeys for the PlannerInfo */
-        fdw_private->canPushdownAllSortFields = true;
+      /* deparse_sortgroup failed returns empty list if no pathkeys for the
+       * PlannerInfo */
+      fdw_private->canPushdownAllSortFields = true;
     }
   }
 
   /* Add a simple default path */
   paths = lappend(paths, create_foreignscan_path(
-                             root,
-                             baserel,
-                             NULL, /* default pathtarget */
+                             root, baserel, NULL, /* default pathtarget */
                              baserel->rows,
 #if PG_VERSION_NUM >= 180000
                              0,
 #endif
                              planstate->startupCost,
-                             baserel->rows * baserel->reltarget->width * 100000, // table scan is very expensive
-                             NIL,                                                /* no pathkeys */
-                             NULL,
-                             NULL,
+                             baserel->rows * baserel->reltarget->width *
+                                 100000, // table scan is very expensive
+                             NIL,        /* no pathkeys */
+                             NULL, NULL,
 #if PG_VERSION_NUM >= 170000
                              NULL,
 #endif
                              (void *)fdw_private));
 
   /* Add each ForeignPath previously found */
-  foreach (lc, paths)
-  {
+  foreach (lc, paths) {
     ForeignPath *path = (ForeignPath *)lfirst(lc);
     /* Add the path without modification */
     add_path(baserel, (Path *)path);
     /* Add the path with sort pushdown if possible */
-    if (apply_pathkeys && fdw_private->deparsed_pathkeys)
-    {
+    if (apply_pathkeys && fdw_private->deparsed_pathkeys) {
       ForeignPath *newpath;
       newpath = create_foreignscan_path(
-          root,
-          baserel,
-          NULL, /* default pathtarget */
+          root, baserel, NULL, /* default pathtarget */
           path->path.rows,
 #if PG_VERSION_NUM >= 180000
           0,
 #endif
-          path->path.startup_cost, path->path.total_cost,
-          apply_pathkeys, NULL,
+          path->path.startup_cost, path->path.total_cost, apply_pathkeys, NULL,
           NULL,
 #if PG_VERSION_NUM >= 170000
           NULL,
@@ -484,15 +471,10 @@ static void fdwGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid forei
  * fdwGetForeignPlan
  *		Create a ForeignScan plan node for scanning the foreign table
  */
-static ForeignScan *fdwGetForeignPlan(
-    PlannerInfo *root,
-    RelOptInfo *baserel,
-    Oid foreigntableid,
-    ForeignPath *best_path,
-    List *tlist,
-    List *scan_clauses,
-    Plan *outer_plan)
-{
+static ForeignScan *fdwGetForeignPlan(PlannerInfo *root, RelOptInfo *baserel,
+                                      Oid foreigntableid,
+                                      ForeignPath *best_path, List *tlist,
+                                      List *scan_clauses, Plan *outer_plan) {
   FdwPathData *pathdata = NULL;
 
   Index scan_relid = baserel->relid;
@@ -504,21 +486,17 @@ static ForeignScan *fdwGetForeignPlan(
     pathdata = (FdwPathData *)best_path->fdw_private;
     planstate->canPushdownAllSortFields = pathdata->canPushdownAllSortFields;
     planstate->pathkeys = pathdata->deparsed_pathkeys;
-  }
-  else {
+  } else {
     planstate->canPushdownAllSortFields = true;
     planstate->pathkeys = NULL;
   }
 
-  ForeignScan *s = make_foreignscan(
-      tlist,
-      scan_clauses,
-      scan_relid,
-      scan_clauses, /* no expressions to evaluate */
-      serializePlanState(planstate),
-      NULL,
-      NULL, /* All quals are meant to be rechecked */
-      NULL);
+  ForeignScan *s =
+      make_foreignscan(tlist, scan_clauses, scan_relid,
+                       scan_clauses, /* no expressions to evaluate */
+                       serializePlanState(planstate), NULL,
+                       NULL, /* All quals are meant to be rechecked */
+                       NULL);
   return s;
 }
 
@@ -526,11 +504,12 @@ static ForeignScan *fdwGetForeignPlan(
  *	"Serialize" a FdwPlanState, so that it is safe to be carried
  *	between the plan and the execution safe.
  */
-void *serializePlanState(FdwPlanState *state)
-{
+void *serializePlanState(FdwPlanState *state) {
   List *result = NULL;
   // Serialize the number of attributes
-  result = lappend(result, makeConst(INT4OID, -1, InvalidOid, 4, Int32GetDatum(state->numattrs), false, true));
+  result =
+      lappend(result, makeConst(INT4OID, -1, InvalidOid, 4,
+                                Int32GetDatum(state->numattrs), false, true));
 
   // Serialize the target list
   result = lappend(result, state->target_list);
@@ -539,10 +518,14 @@ void *serializePlanState(FdwPlanState *state)
   result = lappend(result, serializeDeparsedSortGroup(state->pathkeys));
 
   // Serialize the limit
-  result = lappend(result, makeConst(INT4OID, -1, InvalidOid, 4, Int32GetDatum(state->limit), false, true));
+  result = lappend(result, makeConst(INT4OID, -1, InvalidOid, 4,
+                                     Int32GetDatum(state->limit), false, true));
 
   // Serialize the canPushdownAllSortFields boolean field
-  result = lappend(result, makeConst(BOOLOID, -1, InvalidOid, 1, BoolGetDatum(state->canPushdownAllSortFields), false, true));
+  result =
+      lappend(result, makeConst(BOOLOID, -1, InvalidOid, 1,
+                                BoolGetDatum(state->canPushdownAllSortFields),
+                                false, true));
 
   return result;
 }
@@ -551,12 +534,13 @@ void *serializePlanState(FdwPlanState *state)
  *	"Deserialize" an internal state and inject it in an
  *	FdwExecState
  */
-FdwExecState *initializeExecState(void *internalstate)
-{
+FdwExecState *initializeExecState(void *internalstate) {
   FdwExecState *execstate = palloc0(sizeof(FdwExecState));
-  // internalstate is actually a list generated by serializePlanState consisting of:
+  // internalstate is actually a list generated by serializePlanState consisting
+  // of:
   //  numattrs, target_list, pathkeys, limit, canPushdownAllSortFields
   List *values = (List *)internalstate;
+
   AttrNumber numattrs = ((Const *)linitial(values))->constvalue;
   List *pathkeys;
   int limit;
@@ -585,8 +569,7 @@ FdwExecState *initializeExecState(void *internalstate)
  * 		Convert a Datum to a string by calling the type output function.
  * 		Returns the result or NULL if it cannot be converted.
  */
-static char *datumToString(Datum datum, Oid type)
-{
+static char *datumToString(Datum datum, Oid type) {
   StringInfoData result;
   regproc typoutput;
   HeapTuple tuple;
@@ -594,15 +577,13 @@ static char *datumToString(Datum datum, Oid type)
 
   /* get the type's output function */
   tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type));
-  if (!HeapTupleIsValid(tuple))
-  {
+  if (!HeapTupleIsValid(tuple)) {
     elog(ERROR, "cache lookup failed for type %u", type);
   }
   typoutput = ((Form_pg_type)GETSTRUCT(tuple))->typoutput;
   ReleaseSysCache(tuple);
 
-  switch (type)
-  {
+  switch (type) {
   case TEXTOID:
   case CHAROID:
   case BPCHAROID:
@@ -621,8 +602,7 @@ static char *datumToString(Datum datum, Oid type)
     /* quote string */
     initStringInfo(&result);
     appendStringInfo(&result, "'");
-    for (p = str; *p; ++p)
-    {
+    for (p = str; *p; ++p) {
       if (*p == '\'')
         appendStringInfo(&result, "'");
       appendStringInfo(&result, "%c", *p);
@@ -648,20 +628,14 @@ static char *datumToString(Datum datum, Oid type)
     //		case TIMESTAMPOID:
     //			str = deparseTimestamp(datum, false);
     //			initStringInfo(&result);
-    //			appendStringInfo(&result, "(CAST ('%s' AS TIMESTAMP))", str);
-    //			break;
-    //		case TIMESTAMPTZOID:
-    //			str = deparseTimestamp(datum, true);
-    //			initStringInfo(&result);
-    //			appendStringInfo(&result, "(CAST ('%s' AS TIMESTAMP WITH TIME ZONE))", str);
-    //			break;
-    //		case INTERVALOID:
-    //			str = deparseInterval(datum);
-    //			if (str == NULL)
-    //				return NULL;
-    //			initStringInfo(&result);
-    //			appendStringInfo(&result, "%s", str);
-    //			break;
+    //			appendStringInfo(&result, "(CAST ('%s' AS TIMESTAMP))",
+    // str); 			break; 		case TIMESTAMPTZOID:
+    // str = deparseTimestamp(datum, true); 			initStringInfo(&result);
+    //			appendStringInfo(&result, "(CAST ('%s' AS TIMESTAMP WITH
+    // TIME ZONE))", str); 			break; 		case
+    // INTERVALOID: 			str = deparseInterval(datum); 			if (str ==
+    //NULL) 				return NULL; 			initStringInfo(&result); 			appendStringInfo(&result,
+    //"%s", str); 			break;
   default:
     return NULL;
   }
@@ -674,12 +648,10 @@ static char *datumToString(Datum datum, Oid type)
  * 		In addition, convert the string to upper case.
  * 		This modifies the argument in place!
  */
-char *convertUUID(char *uuid)
-{
+char *convertUUID(char *uuid) {
   char *p = uuid, *q = uuid, c;
 
-  while (*p != '\0')
-  {
+  while (*p != '\0') {
     if (*p == '-')
       ++p;
     c = *(p++);
