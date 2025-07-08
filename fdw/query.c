@@ -101,25 +101,14 @@ List *extractColumns(List *reltargetlist, List *restrictinfolist) {
            nodeToString((Node *)node->clause));
     }
 
-    /* PostgreSQL v16+ compatibility: Handle RestrictInfo nodes properly */
-#if PG_VERSION_NUM >= 160000
-    /* In PostgreSQL v16+, use safe_pull_var_clause but with our custom walker
-     * for RestrictInfo handling */
-    elog(DEBUG1, "extractColumns: PostgreSQL v16+ path - using "
-                 "safe_pull_var_clause with RestrictInfo support");
-    targetcolumns = safe_pull_var_clause(
-        (Node *)node->clause, PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS,
-        "extractColumns_v16");
-#else
-    /* For PostgreSQL v15 and earlier, use the original approach */
+    /* PostgreSQL v16+ compatibility: Extract clause from RestrictInfo before
+     * processing */
     targetcolumns =
-        safe_pull_var_clause((Node *)node->clause,
+        pull_var_clause((Node *)node->clause,
 #if PG_VERSION_NUM >= 90600
-                             PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS,
+                        PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
 #else
-                             PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS,
-#endif
-                             "extractColumns_legacy");
+                        PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
 #endif
 
     columns = list_union(columns, targetcolumns);
@@ -712,152 +701,6 @@ List *deserializeDeparsedSortGroup(List *items) {
 
     result = lappend(result, key);
   }
-
-  return result;
-}
-
-#if PG_VERSION_NUM >= 160000
-/* PostgreSQL v16+ compatibility: Simple RestrictInfo handling in
- * safe_pull_var_clause */
-#endif
-
-/* Custom variable extraction function to avoid PostgreSQL v16+ pull_var_clause
- * issues */
-static List *extract_vars_from_node(Node *node, List *vars) {
-  if (!node) {
-    return vars;
-  }
-
-  switch (nodeTag(node)) {
-  case T_Var: {
-    Var *var = (Var *)node;
-    /* Add this variable to our list if not already present */
-    if (!list_member(vars, var)) {
-      vars = lappend(vars, var);
-    }
-    break;
-  }
-  case T_OpExpr: {
-    OpExpr *opexpr = (OpExpr *)node;
-    ListCell *lc;
-    foreach (lc, opexpr->args) {
-      vars = extract_vars_from_node((Node *)lfirst(lc), vars);
-    }
-    break;
-  }
-  case T_BoolExpr: {
-    BoolExpr *boolexpr = (BoolExpr *)node;
-    ListCell *lc;
-    foreach (lc, boolexpr->args) {
-      vars = extract_vars_from_node((Node *)lfirst(lc), vars);
-    }
-    break;
-  }
-  case T_ScalarArrayOpExpr: {
-    ScalarArrayOpExpr *saopexpr = (ScalarArrayOpExpr *)node;
-    ListCell *lc;
-    foreach (lc, saopexpr->args) {
-      vars = extract_vars_from_node((Node *)lfirst(lc), vars);
-    }
-    break;
-  }
-  case T_FuncExpr: {
-    FuncExpr *funcexpr = (FuncExpr *)node;
-    ListCell *lc;
-    foreach (lc, funcexpr->args) {
-      vars = extract_vars_from_node((Node *)lfirst(lc), vars);
-    }
-    break;
-  }
-  case T_RelabelType: {
-    RelabelType *relabel = (RelabelType *)node;
-    vars = extract_vars_from_node((Node *)relabel->arg, vars);
-    break;
-  }
-  case T_CoerceViaIO: {
-    CoerceViaIO *coerce = (CoerceViaIO *)node;
-    vars = extract_vars_from_node((Node *)coerce->arg, vars);
-    break;
-  }
-  case T_Const:
-  case T_Param:
-    /* Constants and parameters don't contain variables */
-    break;
-  default:
-    /* For unknown node types, log and skip */
-    elog(DEBUG2, "extract_vars_from_node: Skipping unknown node type %d (%s)",
-         (int)nodeTag(node), tagTypeToString(nodeTag(node)));
-    break;
-  }
-
-  return vars;
-}
-
-/* DEBUG: Safe wrapper for pull_var_clause to avoid PostgreSQL v16+
- * compatibility issues */
-List *safe_pull_var_clause(Node *node, int flags, const char *context) {
-  List *result = NULL;
-
-  if (!node) {
-    elog(DEBUG1, "safe_pull_var_clause: NULL node passed from %s", context);
-    return NIL;
-  }
-
-  elog(DEBUG1, "safe_pull_var_clause: Called from %s, node type: %d (%s)",
-       context, (int)nodeTag(node), tagTypeToString(nodeTag(node)));
-
-#if PG_VERSION_NUM >= 160000
-  /* For PostgreSQL v16+, handle RestrictInfo nodes by extracting their clause
-   * Keep extracting until we get to a non-RestrictInfo node */
-  Node *processed_node = node;
-  int depth = 0;
-  while (IsA(processed_node, RestrictInfo) && depth < 10) {
-    RestrictInfo *restrictinfo = (RestrictInfo *)processed_node;
-    elog(DEBUG1,
-         "safe_pull_var_clause: Found RestrictInfo node at depth %d, "
-         "extracting clause",
-         depth);
-    if (restrictinfo->clause) {
-      processed_node = (Node *)restrictinfo->clause;
-      depth++;
-    } else {
-      elog(DEBUG1, "safe_pull_var_clause: RestrictInfo has NULL clause");
-      return NIL;
-    }
-  }
-
-  if (depth >= 10) {
-    elog(WARNING,
-         "safe_pull_var_clause: Too many nested RestrictInfo nodes, stopping "
-         "at depth %d",
-         depth);
-    return NIL;
-  }
-
-  /* Use our custom variable extraction instead of pull_var_clause */
-  result = extract_vars_from_node(processed_node, NIL);
-  elog(DEBUG2,
-       "safe_pull_var_clause: Successfully processed node from %s after %d "
-       "RestrictInfo extractions using custom extractor",
-       context, depth);
-#else
-  /* For PostgreSQL v15 and earlier, use the standard function */
-  PG_TRY();
-  {
-    result = pull_var_clause(node, flags);
-    elog(DEBUG2, "safe_pull_var_clause: Successfully processed node from %s",
-         context);
-  }
-  PG_CATCH();
-  {
-    /* Simple error handling without memory allocation */
-    elog(ERROR,
-         "safe_pull_var_clause: PostgreSQL compatibility error from %s - "
-         "node type: %d (%s)",
-         context, (int)nodeTag(node), tagTypeToString(nodeTag(node)));
-  }
-  PG_END_TRY();
-#endif
 
   return result;
 }
