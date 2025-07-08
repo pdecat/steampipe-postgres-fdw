@@ -41,6 +41,31 @@ List *clausesInvolvingAttr(Index relid, AttrNumber attnum,
 
 Expr *fdw_get_em_expr(EquivalenceClass *ec, RelOptInfo *rel);
 
+/* Safe wrapper for pull_var_clause that handles RestrictInfo nodes */
+static List *safe_pull_var_clause(Node *node, int flags);
+
+/*
+ * Safe wrapper for pull_var_clause that handles RestrictInfo nodes
+ * This ensures we never pass RestrictInfo nodes to PostgreSQL's pull_var_clause
+ */
+static List *
+safe_pull_var_clause(Node *node, int flags)
+{
+  if (node == NULL)
+    return NIL;
+    
+  /* If this is a RestrictInfo node, extract the clause */
+  if (IsA(node, RestrictInfo))
+  {
+    RestrictInfo *restrictinfo = (RestrictInfo *)node;
+    elog(DEBUG1, "DEBUG: safe_pull_var_clause extracting clause from RestrictInfo (clause nodeTag=%d)", nodeTag((Node *)restrictinfo->clause));
+    return pull_var_clause((Node *)restrictinfo->clause, flags);
+  }
+  
+  /* For all other node types, call pull_var_clause directly */
+  return pull_var_clause(node, flags);
+}
+
 /*
  * The list of needed columns (represented by their respective vars)
  * is pulled from:
@@ -61,26 +86,13 @@ extractColumns(List *reltargetlist, List *restrictinfolist)
 
     /* Handle RestrictInfo nodes in target list for PostgreSQL v16+
      * compatibility */
-    if (IsA(node, RestrictInfo)) {
-      RestrictInfo *restrictinfo = (RestrictInfo *)node;
-      targetcolumns =
-          pull_var_clause((Node *)restrictinfo->clause,
+    elog(DEBUG1, "DEBUG: Processing node in target list (nodeTag=%d)", nodeTag(node));
+    targetcolumns = safe_pull_var_clause(node,
 #if PG_VERSION_NUM >= 90600
-                          PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
+                                        PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
 #else
-                          PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
+                                        PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
 #endif
-    } else {
-      targetcolumns =
-          pull_var_clause(node,
-#if PG_VERSION_NUM >= 90600
-                                    PVC_RECURSE_AGGREGATES |
-                                        PVC_RECURSE_PLACEHOLDERS);
-#else
-                                    PVC_RECURSE_AGGREGATES,
-                                    PVC_RECURSE_PLACEHOLDERS);
-#endif
-    }
     columns = list_union(columns, targetcolumns);
     i++;
   }
@@ -88,13 +100,12 @@ extractColumns(List *reltargetlist, List *restrictinfolist)
   {
     List *targetcolumns;
     RestrictInfo *node = (RestrictInfo *)lfirst(lc);
-    targetcolumns = pull_var_clause((Node *)node->clause,
+    elog(DEBUG1, "DEBUG: Processing RestrictInfo in restrictinfo list (clause nodeTag=%d)", nodeTag((Node *)node->clause));
+    targetcolumns = safe_pull_var_clause((Node *)node->clause,
 #if PG_VERSION_NUM >= 90600
-                                    PVC_RECURSE_AGGREGATES |
-                                        PVC_RECURSE_PLACEHOLDERS);
+                                         PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
 #else
-                                    PVC_RECURSE_AGGREGATES,
-                                    PVC_RECURSE_PLACEHOLDERS);
+                                         PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
 #endif
     columns = list_union(columns, targetcolumns);
   }
@@ -360,13 +371,12 @@ colnameFromVar(Var *var, PlannerInfo *root, FdwPlanState *planstate)
  */
 bool isAttrInRestrictInfo(Index relid, AttrNumber attno, RestrictInfo *restrictinfo)
 {
-  List *vars = pull_var_clause((Node *)restrictinfo->clause,
+  elog(DEBUG1, "DEBUG: isAttrInRestrictInfo calling safe_pull_var_clause (clause nodeTag=%d)", nodeTag((Node *)restrictinfo->clause));
+  List *vars = safe_pull_var_clause((Node *)restrictinfo->clause,
 #if PG_VERSION_NUM >= 90600
-                               PVC_RECURSE_AGGREGATES |
-                                   PVC_RECURSE_PLACEHOLDERS);
+                                    PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
 #else
-                               PVC_RECURSE_AGGREGATES,
-                               PVC_RECURSE_PLACEHOLDERS);
+                                    PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
 #endif
   ListCell *lc;
 
