@@ -51,6 +51,7 @@ static List *safe_pull_var_clause(Node *node, int flags);
 static List *
 safe_pull_var_clause(Node *node, int flags)
 {
+  elog(DEBUG1, "DEBUG: safe_pull_var_clause invoked for node (nodeTag=%d)", nodeTag(node));
   if (node == NULL)
     return NIL;
     
