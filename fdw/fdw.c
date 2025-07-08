@@ -498,7 +498,25 @@ static ForeignScan *fdwGetForeignPlan(
   Index scan_relid = baserel->relid;
   FdwPlanState *planstate = (FdwPlanState *)baserel->fdw_private;
   best_path->path.pathtarget->width = planstate->width;
+#if PG_VERSION_NUM >= 160000
+  /* PostgreSQL v16+ compatibility: Handle RestrictInfo nodes manually */
+  {
+    List *actual_clauses = NIL;
+    ListCell *lc;
+
+    foreach(lc, scan_clauses)
+    {
+      RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+      if (IsA(rinfo, RestrictInfo))
+        actual_clauses = lappend(actual_clauses, rinfo->clause);
+      else
+        actual_clauses = lappend(actual_clauses, rinfo);
+    }
+    scan_clauses = actual_clauses;
+  }
+#else
   scan_clauses = extract_actual_clauses(scan_clauses, false);
+#endif
 
   if (best_path->fdw_private != NULL) {
     pathdata = (FdwPathData *)best_path->fdw_private;
