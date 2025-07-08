@@ -59,7 +59,20 @@ extractColumns(List *reltargetlist, List *restrictinfolist)
     List *targetcolumns;
     Node *node = (Node *)lfirst(lc);
 
-    targetcolumns = pull_var_clause(node,
+    /* Handle RestrictInfo nodes in target list for PostgreSQL v16+
+     * compatibility */
+    if (IsA(node, RestrictInfo)) {
+      RestrictInfo *restrictinfo = (RestrictInfo *)node;
+      targetcolumns =
+          pull_var_clause((Node *)restrictinfo->clause,
+#if PG_VERSION_NUM >= 90600
+                          PVC_RECURSE_AGGREGATES | PVC_RECURSE_PLACEHOLDERS);
+#else
+                          PVC_RECURSE_AGGREGATES, PVC_RECURSE_PLACEHOLDERS);
+#endif
+    } else {
+      targetcolumns =
+          pull_var_clause(node,
 #if PG_VERSION_NUM >= 90600
                                     PVC_RECURSE_AGGREGATES |
                                         PVC_RECURSE_PLACEHOLDERS);
@@ -67,6 +80,7 @@ extractColumns(List *reltargetlist, List *restrictinfolist)
                                     PVC_RECURSE_AGGREGATES,
                                     PVC_RECURSE_PLACEHOLDERS);
 #endif
+    }
     columns = list_union(columns, targetcolumns);
     i++;
   }
