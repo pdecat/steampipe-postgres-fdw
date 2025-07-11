@@ -14,7 +14,7 @@ install: build
 	fi
 
 # build standalone 
-standalone: validate_plugin validate_version prebuild.go
+standalone: validate_plugin validate_version prebuild.go hub/fdw_logging.go
 	@echo "Building standalone FDW for plugin: $(plugin)"
 
 	# Remove existing work dir and create a new directory for the render process
@@ -104,7 +104,7 @@ ifndef plugin_github_url
 endif
 endif
 
-build: prebuild.go
+build: prebuild.go hub/fdw_logging.go
 	$(MAKE) -C ./fdw clean
 	$(MAKE) -C ./fdw go
 	$(MAKE) -C ./fdw
@@ -118,10 +118,10 @@ prebuild.go:
 	# copy the template which contains the C includes
 	# this is used to import the postgres bindings by the underlying C compiler
 	cp prebuild.tmpl prebuild.go
-	
-	# set the GOOS in the template 
+
+	# set the GOOS in the template
 	sed -i.bak 's|OS_PLACEHOLDER|$(shell go env GOOS)|' prebuild.go
-	
+
 	# replace known placeholders with values from 'pg_config'
 	sed -i.bak 's|INTERNAL_INCLUDE_PLACEHOLDER|$(shell pg_config --includedir)|' prebuild.go
 	sed -i.bak 's|SERVER_INCLUDE_PLACEHOLDER|$(shell pg_config --includedir-server)|' prebuild.go
@@ -129,9 +129,25 @@ prebuild.go:
 	sed -i.bak 's|LIB_INTL_PLACEHOLDER|$(GETTEXT_INCLUDE)|' prebuild.go
 	rm -f prebuild.go.bak
 
+# make target to generate the FDW logging functions with PostgreSQL bindings
+hub/fdw_logging.go:
+	# copy the template which contains the logging function with C includes
+	cp hub/fdw_logging.tmpl hub/fdw_logging.go
+
+	# set the GOOS in the template
+	sed -i.bak 's|OS_PLACEHOLDER|$(shell go env GOOS)|' hub/fdw_logging.go
+
+	# replace known placeholders with values from 'pg_config'
+	sed -i.bak 's|INTERNAL_INCLUDE_PLACEHOLDER|$(shell pg_config --includedir)|' hub/fdw_logging.go
+	sed -i.bak 's|SERVER_INCLUDE_PLACEHOLDER|$(shell pg_config --includedir-server)|' hub/fdw_logging.go
+	sed -i.bak 's|DISCLAIMER|This is generated. Do not check this in to Git|' hub/fdw_logging.go
+	sed -i.bak 's|LIB_INTL_PLACEHOLDER|$(GETTEXT_INCLUDE)|' hub/fdw_logging.go
+	rm -f hub/fdw_logging.go.bak
+
 clean:
 	$(MAKE) -C ./fdw clean
 	rm -f prebuild.go
+	rm -f hub/fdw_logging.go
 	rm -f steampipe_postgres_fdw.a
 	rm -f steampipe_postgres_fdw.h
 	rm -rf work

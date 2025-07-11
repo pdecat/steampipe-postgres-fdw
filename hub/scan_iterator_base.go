@@ -76,22 +76,28 @@ func (i *scanIteratorBase) Error() error {
 // Next implements Iterator
 // return the next row. Nil row means there are no more rows to scan.
 func (i *scanIteratorBase) Next() (map[string]interface{}, error) {
+	FdwLogMessage(1, fmt.Sprintf("[DEBUG] Next - iterator %p, connection: %s, status: %s", i, i.GetConnectionName(), i.Status()))
+
 	// check the iterator state - has an error occurred
 	if i.status == QueryStatusError {
+		FdwLogMessage(1, fmt.Sprintf("[ERROR] Next - iterator %p in error state: %v", i, i.err))
 		return nil, i.err
 	}
 
 	if !i.CanIterate() {
 		// this is a bug
-		log.Printf("[WARN] scanIteratorBase cannot iterate: connection %s, status: %s", i.GetConnectionName(), i.Status())
+		FdwLogMessage(1, fmt.Sprintf("[WARN] scanIteratorBase cannot iterate: connection %s, status: %s", i.GetConnectionName(), i.Status()))
 		return nil, fmt.Errorf("scanIteratorBase cannot iterate: connection %s, status: %s", i.GetConnectionName(), i.Status())
 	}
 
+	FdwLogMessage(1, fmt.Sprintf("[DEBUG] Next - iterator %p about to block on channel read", i))
 	row := <-i.rows
+	FdwLogMessage(1, fmt.Sprintf("[DEBUG] Next - iterator %p received row: %v", i, row != nil))
 
 	// if the row channel closed, complete the iterator state
 	var res map[string]interface{}
 	if row == nil {
+		FdwLogMessage(1, fmt.Sprintf("[DEBUG] Next - iterator %p received nil row, closing", i))
 		// close the span and set the status
 		i.Close()
 		// remove from hub running iterators
@@ -99,17 +105,21 @@ func (i *scanIteratorBase) Next() (map[string]interface{}, error) {
 
 		// if iterator is in error, return the error
 		if i.Status() == QueryStatusError {
+			FdwLogMessage(1, fmt.Sprintf("[ERROR] Next - iterator %p completed with error: %v", i, i.err))
 			// return error
 			return nil, i.err
 		}
+		FdwLogMessage(1, fmt.Sprintf("[INFO] Next - iterator %p completed successfully", i))
 		// otherwise mark iterator complete, caching result
 	} else {
 		// so we got a row
 		var err error
 		res, err = i.populateRow(row)
 		if err != nil {
+			FdwLogMessage(1, fmt.Sprintf("[ERROR] Next - iterator %p failed to populate row: %v", i, err))
 			return nil, err
 		}
+		FdwLogMessage(1, fmt.Sprintf("[DEBUG] Next - iterator %p populated row successfully", i))
 	}
 	return res, nil
 }
@@ -119,15 +129,28 @@ func (i *scanIteratorBase) closeSpan() {
 }
 
 func (i *scanIteratorBase) Close() {
+	FdwLogMessage(1, fmt.Sprintf("[DEBUG] Close - iterator %p, connection: %s, current status: %s", i, i.GetConnectionName(), i.Status()))
+
 	// call the context cancellation function
-	i.cancel()
+	if i.cancel != nil {
+		FdwLogMessage(1, fmt.Sprintf("[DEBUG] Close - cancelling context for iterator %p", i))
+		i.cancel()
+		FdwLogMessage(1, fmt.Sprintf("[DEBUG] Close - cancelled context for iterator %p", i))
+	} else {
+		FdwLogMessage(1, fmt.Sprintf("[WARN] Close - no cancel function for iterator %p", i))
+	}
 
 	// set status to complete
 	if i.status != QueryStatusError {
+		FdwLogMessage(1, fmt.Sprintf("[DEBUG] Close - setting status to complete for iterator %p", i))
 		i.status = QueryStatusComplete
+	} else {
+		FdwLogMessage(1, fmt.Sprintf("[DEBUG] Close - iterator %p already in error state", i))
 	}
 
+	FdwLogMessage(1, fmt.Sprintf("[DEBUG] Close - closing span for iterator %p", i))
 	i.closeSpan()
+	FdwLogMessage(1, fmt.Sprintf("[INFO] Close - completed for iterator %p", i))
 }
 
 // CanIterate returns true if this iterator has results available to iterate

@@ -8,6 +8,8 @@ steampipe_postgres_fdw.h
 # generated C imports
 0_prebuild.go
 prebuild.go
+# generated logging functions
+hub/fdw_logging.go
 
 # Binaries for programs and plugins
 *.exe
