@@ -76,8 +76,11 @@ func (i *scanIteratorBase) Error() error {
 // Next implements Iterator
 // return the next row. Nil row means there are no more rows to scan.
 func (i *scanIteratorBase) Next() (map[string]interface{}, error) {
+	log.Printf("[DEBUG] Next - iterator %p, connection: %s, status: %s", i, i.GetConnectionName(), i.Status())
+
 	// check the iterator state - has an error occurred
 	if i.status == QueryStatusError {
+		log.Printf("[ERROR] Next - iterator %p in error state: %v", i, i.err)
 		return nil, i.err
 	}
 
@@ -87,11 +90,14 @@ func (i *scanIteratorBase) Next() (map[string]interface{}, error) {
 		return nil, fmt.Errorf("scanIteratorBase cannot iterate: connection %s, status: %s", i.GetConnectionName(), i.Status())
 	}
 
+	FdwLogMessage(1, fmt.Sprintf("[DEBUG] Next - iterator %p about to block on channel read", i))
 	row := <-i.rows
+	FdwLogMessage(1, fmt.Sprintf("[DEBUG] Next - iterator %p received row: %v", i, row != nil))
 
 	// if the row channel closed, complete the iterator state
 	var res map[string]interface{}
 	if row == nil {
+		log.Printf("[DEBUG] Next - iterator %p received nil row, closing", i)
 		// close the span and set the status
 		i.Close()
 		// remove from hub running iterators
@@ -99,17 +105,21 @@ func (i *scanIteratorBase) Next() (map[string]interface{}, error) {
 
 		// if iterator is in error, return the error
 		if i.Status() == QueryStatusError {
+			log.Printf("[ERROR] Next - iterator %p completed with error: %v", i, i.err)
 			// return error
 			return nil, i.err
 		}
+		log.Printf("[INFO] Next - iterator %p completed successfully", i)
 		// otherwise mark iterator complete, caching result
 	} else {
 		// so we got a row
 		var err error
 		res, err = i.populateRow(row)
 		if err != nil {
+			log.Printf("[ERROR] Next - iterator %p failed to populate row: %v", i, err)
 			return nil, err
 		}
+		log.Printf("[DEBUG] Next - iterator %p populated row successfully", i)
 	}
 	return res, nil
 }
@@ -119,15 +129,28 @@ func (i *scanIteratorBase) closeSpan() {
 }
 
 func (i *scanIteratorBase) Close() {
+	log.Printf("[DEBUG] Close - iterator %p, connection: %s, current status: %s", i, i.GetConnectionName(), i.Status())
+
 	// call the context cancellation function
-	i.cancel()
+	if i.cancel != nil {
+		log.Printf("[DEBUG] Close - cancelling context for iterator %p", i)
+		i.cancel()
+		log.Printf("[DEBUG] Close - cancelled context for iterator %p", i)
+	} else {
+		log.Printf("[WARN] Close - no cancel function for iterator %p", i)
+	}
 
 	// set status to complete
 	if i.status != QueryStatusError {
+		log.Printf("[DEBUG] Close - setting status to complete for iterator %p", i)
 		i.status = QueryStatusComplete
+	} else {
+		log.Printf("[DEBUG] Close - iterator %p already in error state", i)
 	}
 
+	log.Printf("[DEBUG] Close - closing span for iterator %p", i)
 	i.closeSpan()
+	log.Printf("[INFO] Close - completed for iterator %p", i)
 }
 
 // CanIterate returns true if this iterator has results available to iterate
