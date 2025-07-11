@@ -42,7 +42,10 @@ static inline TupleDescData *fdw_relationGetDescr(Relation relation) { return Re
 static inline Oid fdw_relationGetNamespace(Relation relation) { return RelationGetNamespace(relation); }
 
 static inline void fdw_errorReport(int level, int code, char *msg) { ereport(level, (errcode(code), errmsg("%s", msg))); }
-static inline void fdw_errorReportWithHint(int level, int code, char *msg, char *hint) { ereport(level, (errcode(code), errmsg("%s", msg), errhint("%s", hint))); }
+static inline void fdw_errorReportWithHint(int level, int code, char *msg,
+                                           char *hint) {
+  ereport(level, (errcode(code), errmsg("%s", msg), errhint("%s", hint)));
+}
 
 static inline HeapTuple fdw_searchSysCache1Oid(Datum key1) { return SearchSysCache1(TYPEOID, key1); }
 static inline HeapTuple fdw_searchSysCache1(Oid id, Datum key1) { return SearchSysCache1(id, key1); }
