@@ -1,0 +1,24 @@
+package hub
+
+/*
+#cgo OS_PLACEHOLDER CFLAGS: -ILIB_INTL_PLACEHOLDER -g
+#cgo OS_PLACEHOLDER CFLAGS: -I../fdw -ISERVER_INCLUDE_PLACEHOLDER -IINTERNAL_INCLUDE_PLACEHOLDER -g
+#cgo linux LDFLAGS: -Wl,-unresolved-symbols=ignore-all
+#cgo darwin LDFLAGS: -Wl,-undefined,dynamic_lookup
+#include "postgres.h"
+#include "common.h"
+#include "fdw_helpers.h"
+*/
+import "C"
+import "unsafe"
+
+/*
+DISCLAIMER
+*/
+
+// FdwLogMessage sends a log message to PostgreSQL's logging system
+func FdwLogMessage(level int, msg string) {
+	cmsg := C.CString(msg)
+	defer C.free(unsafe.Pointer(cmsg))
+	C.fdw_logMessage(C.int(level), cmsg)
+}
