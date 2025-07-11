@@ -158,7 +158,7 @@ func (h *hubBase) Explain(columns []string, quals []*proto.Qual, sortKeys []stri
 
 // StartScan starts a scan
 func (h *hubBase) StartScan(i Iterator) error {
-	log.Printf("[INFO] hubBase StartScan")
+	log.Printf("[INFO] hubBase StartScan - acquiring lock for iterator %p", i)
 
 	// if iterator is not a pluginIterator, do nothing
 	// (i.e. is it an InMemoryIterator
@@ -173,26 +173,34 @@ func (h *hubBase) StartScan(i Iterator) error {
 
 	// ask the iterator for the executor interface
 	// (the iterator just returns itself - we need to do it this way because of the way nested structs work )
+	log.Printf("[DEBUG] StartScan - starting iterator execution for %p", i)
 	iterator.Start(i.(pluginExecutor))
 
 	// add iterator to running list
+	log.Printf("[DEBUG] StartScan - adding iterator %p to running list", i)
 	h.addIterator(iterator)
+	log.Printf("[INFO] StartScan - completed for iterator %p", i)
 
 	return nil
 }
 
 // EndScan is called when Postgres terminates the scan (because it has received enough rows of data)
 func (h *hubBase) EndScan(iter Iterator, limit int64) {
+	log.Printf("[INFO] EndScan - starting for iterator %p, status: %s", iter, iter.Status())
+
 	// is the iterator still running? If so it means postgres is stopping a scan before all rows have been read
 	if iter.Status() == QueryStatusStarted {
 		log.Printf("[INFO] ending scan before iterator complete - limit: %v, iterator: %p", limit, iter)
 		// we normally add the scan metadata when the scan completes - if the scan has not completed, we need to
 		// add the metadata here
 		h.AddScanMetadata(iter)
+		log.Printf("[DEBUG] EndScan - closing iterator %p", iter)
 		iter.Close()
 	}
 
+	log.Printf("[DEBUG] EndScan - removing iterator %p from running list", iter)
 	h.RemoveIterator(iter)
+	log.Printf("[INFO] EndScan - completed for iterator %p", iter)
 }
 
 // AddScanMetadata adds the scan metadata from the given iterator to the hubs array
@@ -263,18 +271,26 @@ func (h *hubBase) Close() {
 
 // Abort shuts down currently running queries
 func (h *hubBase) Abort() {
+	log.Printf("[WARN] Abort - acquiring read lock to abort %d running iterators", len(h.runningIterators))
+
 	// for all running iterators
 	h.runningIteratorsLock.RLock()
 	defer h.runningIteratorsLock.RUnlock()
 
+	iteratorCount := len(h.runningIterators)
+	log.Printf("[WARN] Abort - found %d running iterators to abort", iteratorCount)
+
 	for iter := range h.runningIterators {
+		log.Printf("[DEBUG] Abort - processing iterator %p, status: %s", iter, iter.Status())
 		// read the scan metadata from the iterator and add to our stack
 		h.AddScanMetadata(iter)
 		// close the iterator
+		log.Printf("[DEBUG] Abort - closing iterator %p", iter)
 		iter.Close()
 	}
 	// clear running iterators
 	h.runningIterators = make(map[Iterator]struct{})
+	log.Printf("[WARN] Abort - completed, cleared %d iterators", iteratorCount)
 }
 
 // settings
