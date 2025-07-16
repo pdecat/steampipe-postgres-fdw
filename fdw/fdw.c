@@ -101,6 +101,36 @@ static bool fdwIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel, Ran
 }
 
 /*
+ * Parallel execution callbacks for proper worker coordination
+ */
+
+static Size fdwEstimateDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt) {
+	elog(LOG, "[DEBUG] Worker PID %d: fdwEstimateDSMForeignScan() called", getpid());
+	// No shared memory needed for our implementation
+	return 0;
+}
+
+static void fdwInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate) {
+	elog(LOG, "[DEBUG] Worker PID %d: fdwInitializeDSMForeignScan() called", getpid());
+	// No shared memory initialization needed
+}
+
+static void fdwReInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate) {
+	elog(LOG, "[DEBUG] Worker PID %d: fdwReInitializeDSMForeignScan() called", getpid());
+	// No shared memory re-initialization needed
+}
+
+static void fdwInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc, void *coordinate) {
+	elog(LOG, "[DEBUG] Worker PID %d: fdwInitializeWorkerForeignScan() called", getpid());
+	// Worker initialization - this is where parallel workers should be properly set up
+}
+
+static void fdwShutdownForeignScan(ForeignScanState *node) {
+	elog(LOG, "[DEBUG] Worker PID %d: fdwShutdownForeignScan() called", getpid());
+	// Cleanup parallel execution resources
+}
+
+/*
  * Extract OpenTelemetry trace context from PostgreSQL session variables
  * Returns a formatted string containing traceparent and tracestate, or NULL if not set
  */
