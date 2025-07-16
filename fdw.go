@@ -71,7 +71,7 @@ func init() {
 	cmdconfig.SetAppSpecificConstants()
 
 	level := logging.LogLevel()
-	log.Printf("[INFO] Log level %s\n", level)
+	log.Printf("[INFO] Worker PID %d: Log level %s", os.Getpid(), level)
 	if level != "TRACE" {
 		// suppress logs
 		log.SetOutput(io.Discard)
@@ -88,20 +88,20 @@ func init() {
 	if err := hub.CreateHub(); err != nil {
 		panic(err)
 	}
-	log.Printf("[INFO] .\n******************************************************\n\n\t\tsteampipe postgres fdw init\n\n******************************************************\n")
-	log.Printf("[INFO] Version:   v%s\n", version.FdwVersion.String())
-	log.Printf("[INFO] Log level: %s\n", level)
+	log.Printf("[INFO] Worker PID %d: .\n******************************************************\n\n\t\tsteampipe postgres fdw init\n\n******************************************************\n", os.Getpid())
+	log.Printf("[INFO] Worker PID %d: Version:   v%s", os.Getpid(), version.FdwVersion.String())
+	log.Printf("[INFO] Worker PID %d: Log level: %s", os.Getpid(), level)
 
 	if _, found := os.LookupEnv("STEAMPIPE_FDW_PPROF"); found {
-		log.Printf("[INFO] PROFILING!!!!")
+		log.Printf("[INFO] Worker PID %d: PROFILING!!!!", os.Getpid())
 		go func() {
 			listener, err := net.Listen("tcp", "localhost:0")
 			if err != nil {
-				log.Println(err)
+				log.Printf("[ERROR] Worker PID %d: %v", os.Getpid(), err)
 				return
 			}
-			log.Printf("[INFO] Check http://localhost:%d/debug/pprof/", listener.Addr().(*net.TCPAddr).Port)
-			log.Println(http.Serve(listener, nil))
+			log.Printf("[INFO] Worker PID %d: Check http://localhost:%d/debug/pprof/", os.Getpid(), listener.Addr().(*net.TCPAddr).Port)
+			log.Printf("[ERROR] Worker PID %d: %v", os.Getpid(), http.Serve(listener, nil))
 		}()
 	}
 }
@@ -137,11 +137,11 @@ func goFdwCanSort(deparsed *C.List, planstate *C.FdwPlanState) *C.List {
 		log.Println("[INFO] goFdwCanSort column", columnName, "supportedOrder", supportedOrder, "requiredOrder", requiredOrder)
 
 		if supportedOrder == requiredOrder || supportedOrder == proto.SortOrder_All {
-			log.Printf("[INFO] goFdwCanSort column %s can be pushed down", columnName)
+			log.Printf("[INFO] Worker PID %d: goFdwCanSort column %s can be pushed down", os.Getpid(), columnName)
 			// add deparsedSortGroup to pushDownList
 			pushDownList = C.lappend(pushDownList, unsafe.Pointer(deparsedSortGroup))
 		} else {
-			log.Printf("[INFO] goFdwCanSort column %s CANNOT be pushed down - not pushing down any further columns", columnName)
+			log.Printf("[INFO] Worker PID %d: goFdwCanSort column %s CANNOT be pushed down - not pushing down any further columns", os.Getpid(), columnName)
 			break
 		}
 	}
@@ -165,14 +165,14 @@ func getSortableFields(foreigntableid C.Oid) map[string]proto.SortOrder {
 func goFdwGetRelSize(state *C.FdwPlanState, root *C.PlannerInfo, rows *C.double, width *C.int, baserel *C.RelOptInfo) {
 	logging.ClearProfileData()
 
-	log.Printf("[TRACE] goFdwGetRelSize")
+	log.Printf("[TRACE] Worker PID %d: goFdwGetRelSize", os.Getpid())
 
 	pluginHub := hub.GetHub()
 
 	// get connection name
 	connName := GetSchemaNameFromForeignTableId(types.Oid(state.foreigntableid))
 
-	log.Println("[TRACE] connection name:", connName)
+	log.Printf("[TRACE] Worker PID %d: connection name: %s", os.Getpid(), connName)
 
 	// here we are loading the server options(again) so that they are not lost after the session is restarted
 	serverOpts := GetForeignServerOptionsFromFTableId(types.Oid(state.foreigntableid))
@@ -185,7 +185,7 @@ func goFdwGetRelSize(state *C.FdwPlanState, root *C.PlannerInfo, rows *C.double,
 	// TODO remove need for fdw to load connection config
 	_, err = pluginHub.LoadConnectionConfig()
 	if err != nil {
-		log.Printf("[ERROR] LoadConnectionConfig failed %v ", err)
+		log.Printf("[ERROR] Worker PID %d: LoadConnectionConfig failed %v", os.Getpid(), err)
 		FdwError(err)
 		return
 	}
@@ -196,24 +196,24 @@ func goFdwGetRelSize(state *C.FdwPlanState, root *C.PlannerInfo, rows *C.double,
 	var traceContext string
 	if state.trace_context_string != nil {
 		traceContext = C.GoString(state.trace_context_string)
-		log.Printf("[TRACE] Extracted trace context from session: %s", traceContext)
+		log.Printf("[TRACE] Worker PID %d: Extracted trace context from session: %s", os.Getpid(), traceContext)
 
 		if len(traceContext) > 0 {
-			log.Printf("[DEBUG] Trace context length: %d characters", len(traceContext))
+			log.Printf("[DEBUG] Worker PID %d: Trace context length: %d characters", os.Getpid(), len(traceContext))
 			if strings.Contains(traceContext, "traceparent=") {
-				log.Printf("[DEBUG] Trace context contains traceparent field")
+				log.Printf("[DEBUG] Worker PID %d: Trace context contains traceparent field", os.Getpid())
 			} else {
-				log.Printf("[WARN] Trace context missing traceparent field - may be malformed")
+				log.Printf("[WARN] Worker PID %d: Trace context missing traceparent field - may be malformed", os.Getpid())
 			}
 		}
 	} else {
-		log.Printf("[DEBUG] No trace context found in session variables")
+		log.Printf("[DEBUG] Worker PID %d: No trace context found in session variables", os.Getpid())
 	}
 
 	// Add trace context to options for hub layer
 	if traceContext != "" {
 		tableOpts["trace_context"] = traceContext
-		log.Printf("[DEBUG] Added trace context to table options")
+		log.Printf("[DEBUG] Worker PID %d: Added trace context to table options", os.Getpid())
 	}
 
 	// build columns
@@ -224,7 +224,7 @@ func goFdwGetRelSize(state *C.FdwPlanState, root *C.PlannerInfo, rows *C.double,
 
 	result, err := pluginHub.GetRelSize(columns, nil, tableOpts)
 	if err != nil {
-		log.Println("[ERROR] pluginHub.GetRelSize")
+		log.Printf("[ERROR] Worker PID %d: pluginHub.GetRelSize", os.Getpid())
 		FdwError(err)
 		return
 	}
@@ -239,13 +239,13 @@ func goFdwGetRelSize(state *C.FdwPlanState, root *C.PlannerInfo, rows *C.double,
 func goFdwGetPathKeys(state *C.FdwPlanState) *C.List {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] goFdwGetPathKeys failed with panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: goFdwGetPathKeys failed with panic: %v", os.Getpid(), r)
 
 			FdwError(fmt.Errorf("%v", r))
 		}
 	}()
 
-	log.Printf("[TRACE] goFdwGetPathKeys")
+	log.Printf("[TRACE] Worker PID %d: goFdwGetPathKeys", os.Getpid())
 	pluginHub := hub.GetHub()
 
 	var result *C.List
@@ -292,12 +292,12 @@ func goFdwGetPathKeys(state *C.FdwPlanState) *C.List {
 func goFdwExplainForeignScan(node *C.ForeignScanState, es *C.ExplainState) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] goFdwExplainForeignScan failed with panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: goFdwExplainForeignScan failed with panic: %v", os.Getpid(), r)
 			FdwError(fmt.Errorf("%v", r))
 		}
 	}()
 
-	log.Printf("[TRACE] goFdwExplainForeignScan")
+	log.Printf("[TRACE] Worker PID %d: goFdwExplainForeignScan", os.Getpid())
 	s := GetExecState(node.fdw_state)
 	if s == nil {
 		return
@@ -314,7 +314,7 @@ func goFdwExplainForeignScan(node *C.ForeignScanState, es *C.ExplainState) {
 func goFdwBeginForeignScan(node *C.ForeignScanState, eflags C.int) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] goFdwExplainForeignScan failed with panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: goFdwExplainForeignScan failed with panic: %v", os.Getpid(), r)
 			FdwError(fmt.Errorf("%v", r))
 		}
 	}()
@@ -332,7 +332,7 @@ func goFdwBeginForeignScan(node *C.ForeignScanState, eflags C.int) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] goFdwBeginForeignScan failed with panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: goFdwBeginForeignScan failed with panic: %v", os.Getpid(), r)
 			FdwError(fmt.Errorf("%v", r))
 		}
 	}()
@@ -345,18 +345,18 @@ func goFdwBeginForeignScan(node *C.ForeignScanState, eflags C.int) {
 	var traceContext string
 	if traceContextPtr := C.getTraceContext(); traceContextPtr != nil {
 		traceContext = C.GoString(traceContextPtr)
-		log.Printf("[TRACE] Extracted trace context from session for scan: %s", traceContext)
+		log.Printf("[TRACE] Worker PID %d: Extracted trace context from session for scan: %s", os.Getpid(), traceContext)
 	} else {
-		log.Printf("[DEBUG] No trace context found in session variables for scan")
+		log.Printf("[DEBUG] Worker PID %d: No trace context found in session variables for scan", os.Getpid())
 	}
 
 	// Add trace context to options for hub layer
 	if traceContext != "" {
 		opts["trace_context"] = traceContext
-		log.Printf("[DEBUG] Added trace context to scan options")
+		log.Printf("[DEBUG] Worker PID %d: Added trace context to scan options", os.Getpid())
 	}
 
-	log.Printf("[INFO] goFdwBeginForeignScan, canPushdownAllSortFields %v", execState.canPushdownAllSortFields)
+	log.Printf("[INFO] Worker PID %d: goFdwBeginForeignScan, canPushdownAllSortFields %v", os.Getpid(), execState.canPushdownAllSortFields)
 	var columns []string
 	if execState.target_list != nil {
 		columns = CStringListToGoArray(execState.target_list)
@@ -381,26 +381,26 @@ func goFdwBeginForeignScan(node *C.ForeignScanState, eflags C.int) {
 	// if we are NOT explaining, create an iterator to scan for us
 	if !explain {
 		var sortOrder = getSortColumns(execState)
-		log.Printf("[INFO] goFdwBeginForeignScan, table '%s', sortOrder: %v", opts["table"], sortOrder)
+		log.Printf("[INFO] Worker PID %d: goFdwBeginForeignScan, table '%s', sortOrder: %v", os.Getpid(), opts["table"], sortOrder)
 		// get the limit
 		limit := int64(execState.limit)
 		// if we cannot push down ALL sort fields, do not push down limit
 		if !execState.canPushdownAllSortFields {
-			log.Printf("[INFO] goFdwBeginForeignScan, table '%s', cannot push down all sort fields, setting limit to -1", opts["table"])
+			log.Printf("[INFO] Worker PID %d: goFdwBeginForeignScan, table '%s', cannot push down all sort fields, setting limit to -1", os.Getpid(), opts["table"])
 			limit = -1
 		}
 
 		ts := int64(C.GetSQLCurrentTimestamp(0))
 		iter, err := pluginHub.GetIterator(columns, quals, unhandledRestrictions, limit, sortOrder, ts, opts)
 		if err != nil {
-			log.Printf("[WARN] pluginHub.GetIterator FAILED: %s", err)
+			log.Printf("[WARN] Worker PID %d: pluginHub.GetIterator FAILED: %s", os.Getpid(), err)
 			FdwError(err)
 			return
 		}
 		s.Iter = iter
 	}
 
-	log.Printf("[TRACE] goFdwBeginForeignScan: save exec state %v\n", s)
+	log.Printf("[TRACE] Worker PID %d: goFdwBeginForeignScan: save exec state %v\n", os.Getpid(), s)
 	node.fdw_state = SaveExecState(s)
 
 	logging.LogTime("[fdw] BeginForeignScan end")
@@ -442,10 +442,10 @@ func goFdwIterateForeignScan(node *C.ForeignScanState) *C.TupleTableSlot {
 	C.ExecClearTuple(slot)
 	pluginHub := hub.GetHub()
 
-	log.Printf("[TRACE] goFdwIterateForeignScan, table '%s' (%p)", s.Opts["table"], s.Iter)
+	log.Printf("[TRACE] Worker PID %d: goFdwIterateForeignScan, table '%s' (%p)", os.Getpid(), s.Opts["table"], s.Iter)
 	// if the iterator has not started, start
 	if s.Iter.Status() == hub.QueryStatusReady {
-		log.Printf("[INFO] goFdwIterateForeignScan calling pluginHub.StartScan, table '%s' Current timestamp: %d (%p)", s.Opts["table"], s.Iter.GetQueryTimestamp(), s.Iter)
+		log.Printf("[INFO] Worker PID %d: goFdwIterateForeignScan calling pluginHub.StartScan, table '%s' Current timestamp: %d (%p)", os.Getpid(), s.Opts["table"], s.Iter.GetQueryTimestamp(), s.Iter)
 		if err := pluginHub.StartScan(s.Iter); err != nil {
 			FdwError(err)
 			return slot
@@ -455,13 +455,13 @@ func goFdwIterateForeignScan(node *C.ForeignScanState) *C.TupleTableSlot {
 	// row is a map of column name to value (as an interface)
 	row, err := s.Iter.Next()
 	if err != nil {
-		log.Printf("[INFO] goFdwIterateForeignScan Next returned error: %s (%p)", err.Error(), s.Iter)
+		log.Printf("[INFO] Worker PID %d: goFdwIterateForeignScan Next returned error: %s (%p)", os.Getpid(), err.Error(), s.Iter)
 		FdwError(err)
 		return slot
 	}
 
 	if len(row) == 0 {
-		log.Printf("[INFO] goFdwIterateForeignScan returned empty row - this scan complete (%p)", s.Iter)
+		log.Printf("[INFO] Worker PID %d: goFdwIterateForeignScan returned empty row - this scan complete (%p)", os.Getpid(), s.Iter)
 		// add scan metadata to hub
 		pluginHub.AddScanMetadata(s.Iter)
 		logging.LogTime("[fdw] IterateForeignScan end")
@@ -485,7 +485,7 @@ func goFdwIterateForeignScan(node *C.ForeignScanState) *C.TupleTableSlot {
 		ci := C.getConversionInfo(s.State.cinfos, C.int(i))
 		// convert value into a datum
 		if datum, err := ValToDatum(val, ci, s.State.buffer); err != nil {
-			log.Printf("[WARN] goFdwIterateForeignScan ValToDatum error %v (%p)", err, s.Iter)
+			log.Printf("[WARN] Worker PID %d: goFdwIterateForeignScan ValToDatum error %v (%p)", os.Getpid(), err, s.Iter)
 			FdwError(err)
 			return slot
 		} else {
@@ -504,14 +504,14 @@ func goFdwIterateForeignScan(node *C.ForeignScanState) *C.TupleTableSlot {
 func goFdwReScanForeignScan(node *C.ForeignScanState) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] goFdwReScanForeignScan failed with panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: goFdwReScanForeignScan failed with panic: %v", os.Getpid(), r)
 			FdwError(fmt.Errorf("%v", r))
 		}
 	}()
 	rel := BuildRelation(node.ss.ss_currentRelation)
 	opts := GetFTableOptions(rel.ID)
 
-	log.Printf("[INFO] goFdwReScanForeignScan, connection '%s', table '%s'", opts["connection"], opts["table"])
+	log.Printf("[INFO] Worker PID %d: goFdwReScanForeignScan, connection '%s', table '%s'", os.Getpid(), opts["connection"], opts["table"])
 	// restart the scan
 	goFdwBeginForeignScan(node, 0)
 }
@@ -520,14 +520,14 @@ func goFdwReScanForeignScan(node *C.ForeignScanState) {
 func goFdwEndForeignScan(node *C.ForeignScanState) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] goFdwEndForeignScan failed with panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: goFdwEndForeignScan failed with panic: %v", os.Getpid(), r)
 			FdwError(fmt.Errorf("%v", r))
 		}
 	}()
 	s := GetExecState(node.fdw_state)
 	pluginHub := hub.GetHub()
 	if s != nil {
-		log.Printf("[INFO] goFdwEndForeignScan, iterator: %p", s.Iter)
+		log.Printf("[INFO] Worker PID %d: goFdwEndForeignScan, iterator: %p", os.Getpid(), s.Iter)
 		pluginHub.EndScan(s.Iter, int64(s.State.limit))
 	}
 	ClearExecState(node.fdw_state)
@@ -539,11 +539,11 @@ func goFdwEndForeignScan(node *C.ForeignScanState) {
 func goFdwAbortCallback() {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] goFdwAbortCallback failed with panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: goFdwAbortCallback failed with panic: %v", os.Getpid(), r)
 			// DO NOT call FdwError or we will recurse
 		}
 	}()
-	log.Printf("[INFO] goFdwAbortCallback")
+	log.Printf("[INFO] Worker PID %d: goFdwAbortCallback", os.Getpid())
 	pluginHub := hub.GetHub()
 	pluginHub.Abort()
 
@@ -553,12 +553,12 @@ func goFdwAbortCallback() {
 func goFdwImportForeignSchema(stmt *C.ImportForeignSchemaStmt, serverOid C.Oid) *C.List {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] goFdwImportForeignSchema failed with panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: goFdwImportForeignSchema failed with panic: %v", os.Getpid(), r)
 			FdwError(fmt.Errorf("%v", r))
 		}
 	}()
 
-	log.Printf("[INFO] goFdwImportForeignSchema remote '%s' local '%s'\n", C.GoString(stmt.remote_schema), C.GoString(stmt.local_schema))
+	log.Printf("[INFO] Worker PID %d: goFdwImportForeignSchema remote '%s' local '%s'\n", os.Getpid(), C.GoString(stmt.remote_schema), C.GoString(stmt.local_schema))
 	// get the plugin hub,
 	pluginHub := hub.GetHub()
 
@@ -567,13 +567,13 @@ func goFdwImportForeignSchema(stmt *C.ImportForeignSchemaStmt, serverOid C.Oid) 
 
 	// special handling for the command schema
 	if remoteSchema == constants.InternalSchema {
-		log.Printf("[INFO] importing setting tables into %s", remoteSchema)
+		log.Printf("[INFO] Worker PID %d: importing setting tables into %s", os.Getpid(), remoteSchema)
 		settingsSchema := pluginHub.GetSettingsSchema()
 		sql := SchemaToSql(settingsSchema, stmt, serverOid)
 		return sql
 	}
 	if remoteSchema == constants.LegacyCommandSchema {
-		log.Printf("[INFO] importing setting tables into %s", remoteSchema)
+		log.Printf("[INFO] Worker PID %d: importing setting tables into %s", os.Getpid(), remoteSchema)
 		settingsSchema := pluginHub.GetLegacySettingsSchema()
 		sql := SchemaToSql(settingsSchema, stmt, serverOid)
 		return sql
@@ -591,7 +591,7 @@ func goFdwImportForeignSchema(stmt *C.ImportForeignSchemaStmt, serverOid C.Oid) 
 
 	schema, err := pluginHub.GetSchema(remoteSchema, localSchema)
 	if err != nil {
-		log.Printf("[WARN] goFdwImportForeignSchema failed: %s", err)
+		log.Printf("[WARN] Worker PID %d: goFdwImportForeignSchema failed: %s", os.Getpid(), err)
 		FdwError(err)
 		return nil
 	}
@@ -604,7 +604,7 @@ func goFdwImportForeignSchema(stmt *C.ImportForeignSchemaStmt, serverOid C.Oid) 
 func goFdwExecForeignInsert(estate *C.EState, rinfo *C.ResultRelInfo, slot *C.TupleTableSlot, planSlot *C.TupleTableSlot) *C.TupleTableSlot {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] goFdwExecForeignInsert failed with panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: goFdwExecForeignInsert failed with panic: %v", os.Getpid(), r)
 			FdwError(fmt.Errorf("%v", r))
 		}
 	}()
@@ -697,11 +697,11 @@ func handleCommandInsert(rinfo *C.ResultRelInfo, slot *C.TupleTableSlot, rel C.R
 func goFdwShutdown() {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] goFdwShutdown failed with panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: goFdwShutdown failed with panic: %v", os.Getpid(), r)
 			// DO NOT call FdwError or we will recurse
 		}
 	}()
-	log.Printf("[INFO] .\n******************************************************\n\n\t\tsteampipe postgres fdw shutdown\n\n******************************************************\n")
+	log.Printf("[INFO] Worker PID %d: .\n******************************************************\n\n\t\tsteampipe postgres fdw shutdown\n\n******************************************************\n", os.Getpid())
 	pluginHub := hub.GetHub()
 	pluginHub.Close()
 }

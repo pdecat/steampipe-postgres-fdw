@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"log"
+	"os"
 
 	"github.com/turbot/steampipe-plugin-sdk/v5/anywhere"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
@@ -34,7 +35,7 @@ func (i *scanIteratorLocal) execute(req *proto.ExecuteRequest) (row_stream.Recei
 	stream := anywhere.NewLocalPluginStream(ctx)
 
 	plugin := i.hub.(*HubLocal).plugin
-	log.Printf("[INFO] StartScan for table: %s, cache enabled: %v, iterator %p, %d quals (%s)", i.table, req.CacheEnabled, i, len(i.queryContext.Quals), i.callId)
+	log.Printf("[INFO] Worker PID %d: StartScan for table: %s, cache enabled: %v, iterator %p, %d quals (%s)", os.Getpid(), i.table, req.CacheEnabled, i, len(i.queryContext.Quals), i.callId)
 	plugin.CallExecuteAsync(req, stream)
 
 	return stream, ctx, cancel, nil

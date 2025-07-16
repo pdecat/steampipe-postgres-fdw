@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"log"
+	"os"
 
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
@@ -35,7 +36,7 @@ func (i *scanIterator) GetPluginName() string {
 
 // execute implements executor
 func (i *scanIterator) execute(req *proto.ExecuteRequest) (row_stream.Receiver, context.Context, context.CancelFunc, error) {
-	log.Printf("[INFO] StartScan for table: %s, cache enabled: %v, iterator %p, %d quals (%s)", i.table, req.CacheEnabled, i, len(i.queryContext.Quals), i.callId)
+	log.Printf("[INFO] Worker PID %d: StartScan for table: %s, cache enabled: %v, iterator %p, %d quals (%s)", os.Getpid(), i.table, req.CacheEnabled, i, len(i.queryContext.Quals), i.callId)
 	stream, ctx, cancel, err := i.connectionPlugin.PluginClient.Execute(req)
 	// format GRPC errors
 	err = grpc.HandleGrpcError(err, i.connectionPlugin.PluginName, "Execute")
