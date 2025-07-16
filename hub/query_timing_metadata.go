@@ -2,6 +2,7 @@ package hub
 
 import (
 	"log"
+	"os"
 	"sort"
 	"sync"
 
@@ -58,12 +59,12 @@ func newQueryTimingMetadata() *queryTimingMetadata {
 }
 
 func (m *queryTimingMetadata) removeStaleScanMetadata(currentTimestamp int64) {
-	log.Printf("[INFO] removeStaleScanMetadata for current query timestamp %d", currentTimestamp)
+	log.Printf("[INFO] Worker PID %d: removeStaleScanMetadata for current query timestamp %d", os.Getpid(), currentTimestamp)
 
 	// clear all query metadata for previous queries
 	for existingTimestamp := range m.scanMetadata {
 		if existingTimestamp != currentTimestamp {
-			log.Printf("[INFO] REMOVING timestamp %d", existingTimestamp)
+			log.Printf("[INFO] Worker PID %d: REMOVING timestamp %d", os.Getpid(), existingTimestamp)
 			delete(m.scanMetadata, existingTimestamp)
 			delete(m.queryRowSummary, existingTimestamp)
 		}
