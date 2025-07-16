@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"unsafe"
 
 	"github.com/gertd/go-pluralize"
@@ -22,7 +23,7 @@ import (
 
 func singleRestrictionToQual(it *C.ListCell, node *C.ForeignScanState, cinfos *conversionInfos) *proto.Qual {
 	restriction := C.cellGetExpr(it)
-	log.Printf("[TRACE] SingleRestrictionToQual: restriction %s", C.GoString(C.tagTypeToString(C.fdw_nodeTag(restriction))))
+	log.Printf("[TRACE] Worker PID %d: SingleRestrictionToQual: restriction %s", os.Getpid(), C.GoString(C.tagTypeToString(C.fdw_nodeTag(restriction))))
 
 	var q *proto.Qual
 	switch C.fdw_nodeTag(restriction) {
@@ -48,7 +49,7 @@ func singleRestrictionToQual(it *C.ListCell, node *C.ForeignScanState, cinfos *c
 func restrictionsToQuals(node *C.ForeignScanState, cinfos *conversionInfos) (qualsList *proto.Quals, unhandledRestrictions int) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] restrictionsToQuals recovered from panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: restrictionsToQuals recovered from panic: %v", os.Getpid(), r)
 		}
 	}()
 
@@ -71,12 +72,13 @@ func restrictionsToQuals(node *C.ForeignScanState, cinfos *conversionInfos) (qua
 		}
 
 	}
-	log.Printf("[TRACE] RestrictionsToQuals: converted postgres restrictions protobuf quals")
+	log.Printf("[TRACE] Worker PID %d: RestrictionsToQuals: converted postgres restrictions protobuf quals", os.Getpid())
 	for _, q := range qualsList.Quals {
-		log.Printf("[TRACE] %s", grpc.QualToString(q))
+		log.Printf("[TRACE] Worker PID %d: %s", os.Getpid(), grpc.QualToString(q))
 	}
 	if unhandledRestrictions > 0 {
-		log.Printf("[WARN] RestrictionsToQuals: failed to convert %d %s to quals",
+		log.Printf("[WARN] Worker PID %d: RestrictionsToQuals: failed to convert %d %s to quals",
+		os.Getpid(),
 			unhandledRestrictions,
 			pluralize.NewClient().Pluralize("restriction", unhandledRestrictions, false))
 	}
@@ -85,13 +87,13 @@ func restrictionsToQuals(node *C.ForeignScanState, cinfos *conversionInfos) (qua
 
 // build a protobuf qual from an OpExpr
 func qualFromOpExpr(restriction *C.OpExpr, node *C.ForeignScanState, cinfos *conversionInfos) *proto.Qual {
-	log.Printf("[TRACE] qualFromOpExpr")
+	log.Printf("[TRACE] Worker PID %d: qualFromOpExpr", os.Getpid())
 	plan := (*C.ForeignScan)(unsafe.Pointer(node.ss.ps.plan))
 	relids := C.bms_make_singleton(C.int(plan.scan.scanrelid))
 
 	restriction = C.canonicalOpExpr(restriction, relids)
 	if restriction == nil {
-		log.Printf("[INFO] could not convert OpExpr to canonical form - NOT adding qual for OpExpr")
+		log.Printf("[INFO] Worker PID %d: could not convert OpExpr to canonical form - NOT adding qual for OpExpr", os.Getpid())
 		return nil
 	}
 
@@ -100,20 +102,20 @@ func qualFromOpExpr(restriction *C.OpExpr, node *C.ForeignScanState, cinfos *con
 
 	// Do not add it if it either contains a mutable function, or makes self references in the right hand side.
 	if C.contain_volatile_functions((*C.Node)(right)) || C.bms_is_subset(relids, C.pull_varnos(nil, (*C.Node)(right))) {
-		log.Printf("[TRACE] restriction either contains a mutable function, or makes self references in the right hand side - NOT adding qual for OpExpr")
+		log.Printf("[TRACE] Worker PID %d: restriction either contains a mutable function, or makes self references in the right hand side - NOT adding qual for OpExpr", os.Getpid())
 		return nil
 	}
 
 	var arrayIndex = int(left.varattno - 1)
 	ci := cinfos.get(arrayIndex)
 	if ci == nil {
-		log.Printf("[WARN] failed to convert qual value - could not get conversion info for attribute %d", arrayIndex)
+		log.Printf("[WARN] Worker PID %d: failed to convert qual value - could not get conversion info for attribute %d", os.Getpid(), arrayIndex)
 		return nil
 	}
 
 	qualValue, err := getQualValue(right, node, ci)
 	if err != nil {
-		log.Printf("[INFO] failed to convert qual value; %v", err)
+		log.Printf("[INFO] Worker PID %d: failed to convert qual value; %v", os.Getpid(), err)
 		return nil
 	}
 
@@ -125,7 +127,7 @@ func qualFromOpExpr(restriction *C.OpExpr, node *C.ForeignScanState, cinfos *con
 		Value:     qualValue,
 	}
 
-	log.Printf("[TRACE] qualFromOpExpr returning %v", qual)
+	log.Printf("[TRACE] Worker PID %d: qualFromOpExpr returning %v", os.Getpid(), qual)
 	return qual
 }
 
@@ -134,7 +136,7 @@ func qualFromVar(arg *C.Var, node *C.ForeignScanState, cinfos *conversionInfos) 
 	column := columnFromVar(arg, cinfos)
 	// if we failed to get a column we cannot create a qual
 	if column == "" {
-		log.Printf("[WARN] qualFromVar failed to get column from variable %v", arg)
+		log.Printf("[WARN] Worker PID %d: qualFromVar failed to get column from variable %v", os.Getpid(), arg)
 		return nil
 	}
 
@@ -152,7 +154,7 @@ func qualFromScalarOpExpr(restriction *C.ScalarArrayOpExpr, node *C.ForeignScanS
 	restriction = C.canonicalScalarArrayOpExpr(restriction, relids)
 
 	if restriction == nil {
-		log.Printf("[WARN] could not convert OpExpr to canonical form - NOT adding qual for OpExpr")
+		log.Printf("[WARN] Worker PID %d: could not convert OpExpr to canonical form - NOT adding qual for OpExpr", os.Getpid())
 		return nil
 	}
 
@@ -161,20 +163,20 @@ func qualFromScalarOpExpr(restriction *C.ScalarArrayOpExpr, node *C.ForeignScanS
 
 	// Do not add it if it either contains a mutable function, or makes self references in the right hand side.
 	if C.contain_volatile_functions((*C.Node)(right)) || C.bms_is_subset(relids, C.pull_varnos(nil, (*C.Node)(right))) {
-		log.Printf("[TRACE] restriction either contains a mutable function, or makes self references in the right hand side - NOT adding qual for OpExpr")
+		log.Printf("[TRACE] Worker PID %d: restriction either contains a mutable function, or makes self references in the right hand side - NOT adding qual for OpExpr", os.Getpid())
 		return nil
 	}
 
 	var arrayIndex = int(left.varattno - 1)
 	ci := cinfos.get(arrayIndex)
 	if ci == nil {
-		log.Printf("[WARN]] failed to convert qual value - could not get conversion info for attribute %d", arrayIndex)
+		log.Printf("[WARN] Worker PID %d: failed to convert qual value - could not get conversion info for attribute %d", os.Getpid())
 		return nil
 	}
 
 	qualValue, err := getQualValue(right, node, ci)
 	if err != nil {
-		log.Printf("[WARN] failed to convert qual value; %v", err)
+		log.Printf("[WARN] Worker PID %d: failed to convert qual value; %v", os.Getpid(), err)
 		return nil
 	}
 
@@ -211,7 +213,7 @@ func qualFromNullTest(restriction *C.NullTest, node *C.ForeignScanState, cinfos 
 	column := columnFromVar(arg, cinfos)
 	// if we failed to get a column we cannot create a qual
 	if column == "" {
-		log.Printf("[WARN] qualFromNullTest failed to get column from variable %v", arg)
+		log.Printf("[WARN] Worker PID %d: qualFromNullTest failed to get column from variable %v", os.Getpid(), arg)
 		return nil
 	}
 
@@ -235,7 +237,7 @@ func qualFromBooleanTest(restriction *C.BooleanTest, node *C.ForeignScanState, c
 	column := columnFromVar(variable, cinfos)
 	// if we failed to get a column we cannot create a qual
 	if column == "" {
-		log.Printf("[WARN] qualFromBooleanTest failed to get column from variable %v", variable)
+		log.Printf("[WARN] Worker PID %d: qualFromBooleanTest failed to get column from variable %v", os.Getpid(), variable)
 		return nil
 	}
 
@@ -265,7 +267,7 @@ func qualFromBooleanTest(restriction *C.BooleanTest, node *C.ForeignScanState, c
 func qualFromBoolExpr(restriction *C.BoolExpr, node *C.ForeignScanState, cinfos *conversionInfos) *proto.Qual {
 	// See https://doxygen.postgresql.org/primnodes_8h.html#a27f637bf3e2c33cc8e48661a8864c7af for the list
 	boolExprNames := []string{"AND" /* 0 */, "OR" /* 1 */, "NOT" /* 2 */}
-	log.Printf("[TRACE] qualFromBoolExpr op is %s with %d children", boolExprNames[restriction.boolop], C.list_length(restriction.args))
+	log.Printf("[TRACE] Worker PID %d: qualFromBoolExpr op is %s with %d children", os.Getpid(), boolExprNames[restriction.boolop], C.list_length(restriction.args))
 
 	arg := C.cellGetExpr(C.list_head(restriction.args))
 	// NOTE this handles boolean expression with a single argument and a NOT operato
@@ -276,7 +278,7 @@ func qualFromBoolExpr(restriction *C.BoolExpr, node *C.ForeignScanState, cinfos 
 		column := columnFromVar(variable, cinfos)
 		// if we failed to get a column we cannot create a qual
 		if column == "" {
-			log.Printf("[WARN] qualFromBoolExpr failed to get column from variable %v", arg)
+			log.Printf("[WARN] Worker PID %d: qualFromBoolExpr failed to get column from variable %v", os.Getpid(), arg)
 			return nil
 		}
 
@@ -294,27 +296,27 @@ func qualFromBoolExpr(restriction *C.BoolExpr, node *C.ForeignScanState, cinfos 
 		for it := C.list_head(restriction.args); it != nil; it = C.lnext(restriction.args, it) {
 			// `it` is each part of the OR
 			q := singleRestrictionToQual(it, node, cinfos) // reuse code that understands each part
-			log.Printf("[TRACE] qualFromBoolExpr: OR member %s", q)
+			log.Printf("[TRACE] Worker PID %d: qualFromBoolExpr: OR member %s", os.Getpid(), q)
 			if q == nil { // couldn't turn one part of the OR into a qual, so the entire OR can't be handled either
-				log.Printf("[TRACE] qualFromBoolExpr can't convert OR to IN, part of OR can't be translated to qual")
+				log.Printf("[TRACE] Worker PID %d: qualFromBoolExpr can't convert OR to IN, part of OR can't be translated to qual", os.Getpid())
 				return nil
 			}
 
 			qualsForOrMembers = append(qualsForOrMembers, q)
 		}
 
-		log.Printf("[TRACE] qualFromBoolExpr: all OR exprs %s", qualsForOrMembers)
+		log.Printf("[TRACE] Worker PID %d: qualFromBoolExpr: all OR exprs %s", os.Getpid(), qualsForOrMembers)
 
 		// now check that they all target the same column and have operation EQUALS
 		for _, part := range qualsForOrMembers {
 			operator := part.Operator.(*proto.Qual_StringValue)
 			// if an OR part isn't column='...', then we don't know how to handle that case so break out
 			if part.FieldName != qualsForOrMembers[0].FieldName || operator.StringValue != "=" {
-				log.Printf("[TRACE] qualFromBoolExpr can't convert OR to IN, not all OR refers to same column with ==")
+				log.Printf("[TRACE] Worker PID %d: qualFromBoolExpr can't convert OR to IN, not all OR refers to same column with ==", os.Getpid())
 				return nil
 			}
 		}
-		log.Printf("[TRACE] all OR parts are == against same column %s, converting to IN", qualsForOrMembers[0].FieldName)
+		log.Printf("[TRACE] Worker PID %d: all OR parts are == against same column %s, converting to IN", os.Getpid(), qualsForOrMembers[0].FieldName)
 
 		// finally gather the values from each OR member clause
 		qualValues := make([]*proto.QualValue, 0, len(qualsForOrMembers))
@@ -345,16 +347,16 @@ func qualFromBoolExpr(restriction *C.BoolExpr, node *C.ForeignScanState, cinfos 
 func columnFromVar(variable *C.Var, cinfos *conversionInfos) string {
 	var arrayIndex = int(variable.varattno - 1)
 	if arrayIndex < 0 {
-		log.Printf("[WARN] columnFromVar failed - index %d, returning empty string", arrayIndex)
+		log.Printf("[WARN] Worker PID %d: columnFromVar failed - index %d, returning empty string", os.Getpid(), arrayIndex)
 		return ""
 	}
 	ci := cinfos.get(arrayIndex)
 	if ci == nil {
-		log.Printf("[WARN] columnFromVar failed - could not get conversion info for index %d, returning empty string", arrayIndex)
+		log.Printf("[WARN] Worker PID %d: columnFromVar failed - could not get conversion info for index %d, returning empty string", os.Getpid(), arrayIndex)
 		return ""
 	}
 	if ci.attrname == nil {
-		log.Printf("[WARN] columnFromVar failed - conversion info for index %d has no attrname, returning empty string", arrayIndex)
+		log.Printf("[WARN] Worker PID %d: columnFromVar failed - conversion info for index %d has no attrname, returning empty string", os.Getpid(), arrayIndex)
 		return ""
 	}
 
@@ -362,7 +364,7 @@ func columnFromVar(variable *C.Var, cinfos *conversionInfos) string {
 }
 
 func getQualValue(right unsafe.Pointer, node *C.ForeignScanState, ci *C.ConversionInfo) (*proto.QualValue, error) {
-	log.Printf("[TRACE] getQualValue")
+	log.Printf("[TRACE] Worker PID %d: getQualValue", os.Getpid())
 	var isNull C.bool
 	var typeOid C.Oid
 	var value C.Datum
@@ -373,14 +375,14 @@ func getQualValue(right unsafe.Pointer, node *C.ForeignScanState, ci *C.Conversi
 		typeOid = constQual.consttype
 		value = constQual.constvalue
 		isNull = constQual.constisnull
-		log.Printf("[TRACE] getQualValue T_Const qual, value %v", value)
+		log.Printf("[TRACE] Worker PID %d: getQualValue T_Const qual, value %v", os.Getpid(), value)
 	case C.T_Param:
 		paramQual := (*C.Param)(right)
 		typeOid = paramQual.paramtype
 		exprState := C.ExecInitExpr(valueExpression, (*C.PlanState)(unsafe.Pointer(node)))
 		econtext := node.ss.ps.ps_ExprContext
 		value = C.ExecEvalExpr(exprState, econtext, &isNull)
-		log.Printf("[TRACE] getQualValue T_Param qual, value %v", value)
+		log.Printf("[TRACE] Worker PID %d: getQualValue T_Param qual, value %v", os.Getpid(), value)
 	case C.T_OpExpr:
 		/* T_OpExpr may be something like
 		   where date_time_column > current_timestamp - interval '1 hr'
@@ -397,26 +399,26 @@ func getQualValue(right unsafe.Pointer, node *C.ForeignScanState, ci *C.Conversi
 
 		opExprQual := (*C.OpExpr)(right)
 
-		log.Printf("[TRACE] getQualValue T_OpExpr qual opno %d, opfuncid %d", opExprQual.opno, opExprQual.opfuncid)
+		log.Printf("[TRACE] Worker PID %d: getQualValue T_OpExpr qual opno %d, opfuncid %d", os.Getpid(), opExprQual.opno, opExprQual.opfuncid)
 
 		// TACTICAL we know that trying to evaluate a qual deriving from a jsonb_array_elements function call causes
 		// ExecEvalExpr to crash - so skip evaluation in that case
 		if opExprQual.opfuncid == 3214 {
-			log.Printf("[TRACE] skipping OpExpr evaluation as opfuncid 3214 (jsonb_array_elements) is not supported)")
+			log.Printf("[TRACE] Worker PID %d: skipping OpExpr evaluation as opfuncid 3214 (jsonb_array_elements) is not supported)", os.Getpid())
 			return nil, fmt.Errorf("QualDefsToQuals: unsupported qual value (type %s, opfuncid %d), skipping\n", C.GoString(C.tagTypeToString(C.fdw_nodeTag(valueExpression))), opExprQual.opfuncid)
 		}
 		typeOid = opExprQual.opresulttype
 		exprState := C.ExecInitExpr(valueExpression, (*C.PlanState)(unsafe.Pointer(node)))
 		econtext := node.ss.ps.ps_ExprContext
 		value = C.ExecEvalExpr(exprState, econtext, &isNull)
-		log.Printf("[TRACE] getQualValue T_OpExpr qual, value %v, isNull %v", value, isNull)
+		log.Printf("[TRACE] Worker PID %d: getQualValue T_OpExpr qual, value %v, isNull %v", os.Getpid(), value, isNull)
 	default:
 		return nil, fmt.Errorf("QualDefsToQuals: unsupported qual value (type %s), skipping\n", C.GoString(C.tagTypeToString(C.fdw_nodeTag(valueExpression))))
 	}
 
 	var qualValue *proto.QualValue
 	if isNull {
-		log.Printf("[TRACE] qualDef.isnull=true - returning qual with nil value")
+		log.Printf("[TRACE] Worker PID %d: qualDef.isnull=true - returning qual with nil value", os.Getpid())
 		qualValue = nil
 	} else {
 		if typeOid == C.InvalidOid {
@@ -461,11 +463,11 @@ func datumToQualValue(datum C.Datum, typeOid C.Oid, cinfo *C.ConversionInfo) (re
 		if C.isIpV6(inet) {
 			ipAddrString = net.IP(ipAddrBytes).String()
 			protocolVersion = grpc.IPv6
-			log.Printf("[TRACE] ipv6 qual: %s/%d", ipAddrString, netmaskBits)
+			log.Printf("[TRACE] Worker PID %d: ipv6 qual: %s/%d", os.Getpid(), ipAddrString, netmaskBits)
 		} else {
 			ipAddrString = net.IPv4(ipAddrBytes[0], ipAddrBytes[1], ipAddrBytes[2], ipAddrBytes[3]).String()
 			protocolVersion = grpc.IPv4
-			log.Printf("[TRACE] ipv4 qual: %s/%d", ipAddrString, netmaskBits)
+			log.Printf("[TRACE] Worker PID %d: ipv4 qual: %s/%d", os.Getpid(), ipAddrString, netmaskBits)
 		}
 		result.Value = &proto.QualValue_InetValue{
 			InetValue: &proto.Inet{
@@ -514,7 +516,7 @@ func datumToQualValue(datum C.Datum, typeOid C.Oid, cinfo *C.ConversionInfo) (re
 		}
 		result.Value = &proto.QualValue_JsonbValue{JsonbValue: jsonbQualStr}
 	default:
-		log.Printf("[INFO] datumToQualValue unknown typeoid %v ", typeOid)
+		log.Printf("[INFO] Worker PID %d: datumToQualValue unknown typeoid %v ", os.Getpid(), typeOid)
 		result, err = convertUnknown(datum, typeOid, cinfo)
 	}
 	return
@@ -529,7 +531,7 @@ func convertUnknown(datum C.Datum, typeOid C.Oid, cinfo *C.ConversionInfo) (*pro
 	C.ReleaseSysCache(tuple)
 
 	if (typeStruct.typelem != 0) && (typeStruct.typlen == -1) {
-		log.Printf("[TRACE] datum is an array")
+		log.Printf("[TRACE] Worker PID %d: datum is an array", os.Getpid())
 		return datumArrayToQualValue(datum, typeOid, cinfo)
 	}
 
@@ -554,7 +556,7 @@ func datumArrayToQualValue(datum C.Datum, typeOid C.Oid, cinfo *C.ConversionInfo
 	var isNull C.bool
 	for C.array_iterate(iterator, &elem, &isNull) {
 		if isNull == C.bool(true) {
-			log.Printf("[TRACE] datumArrayToQualValue: null qual value: %v", isNull)
+			log.Printf("[TRACE] Worker PID %d: datumArrayToQualValue: null qual value: %v", os.Getpid(), isNull)
 			log.Println(isNull)
 			qualValues = append(qualValues, nil)
 			continue
@@ -569,13 +571,13 @@ func datumArrayToQualValue(datum C.Datum, typeOid C.Oid, cinfo *C.ConversionInfo
 		if qualValue, err := datumToQualValue(elem, typeStruct.typelem, cinfo); err != nil {
 			return nil, err
 		} else {
-			log.Printf("[INFO] datumArrayToQualValue: successfully converted qual value %v", qualValue)
+			log.Printf("[INFO] Worker PID %d: datumArrayToQualValue: successfully converted qual value %v", os.Getpid(), qualValue)
 
 			if !qualValueArrayContainsValue(qualValues, qualValue) {
-				log.Printf("[INFO] adding qual value %v", qualValue)
+				log.Printf("[INFO] Worker PID %d: adding qual value %v", os.Getpid(), qualValue)
 				qualValues = append(qualValues, qualValue)
 			} else {
-				log.Printf("[INFO] qual value array already contains an identical qual value %v", qualValue)
+				log.Printf("[INFO] Worker PID %d: qual value array already contains an identical qual value %v", os.Getpid(), qualValue)
 			}
 		}
 	}
@@ -585,7 +587,7 @@ func datumArrayToQualValue(datum C.Datum, typeOid C.Oid, cinfo *C.ConversionInfo
 		},
 	}
 
-	log.Printf("[TRACE] datumArrayToQualValue complete, returning array of %d quals values \n", len(qualValues))
+	log.Printf("[TRACE] Worker PID %d: datumArrayToQualValue complete, returning array of %d quals values \n", os.Getpid(), len(qualValues))
 
 	return result, nil
 }

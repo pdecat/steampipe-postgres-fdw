@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"log"
+	"os"
 
 	"github.com/turbot/steampipe-plugin-sdk/v6/grpc/proto"
 	"github.com/turbot/steampipe-plugin-sdk/v6/row_stream"
@@ -33,7 +34,7 @@ func (i *scanIteratorLocal) execute(req *proto.ExecuteRequest) (row_stream.Recei
 	stream := newLocalStream(ctx)
 
 	plugin := i.hub.(*HubLocal).plugin
-	log.Printf("[INFO] StartScan for table: %s, cache enabled: %v, iterator %p, %d quals (%s)", i.table, req.CacheEnabled, i, len(i.queryContext.Quals), i.callId)
+	log.Printf("[INFO] Worker PID %d: StartScan for table: %s, cache enabled: %v, iterator %p, %d quals (%s)", os.Getpid(), i.table, req.CacheEnabled, i, len(i.queryContext.Quals), i.callId)
 	go func() {
 		// Execute recovers a plugin panic into its error
 		stream.finish(plugin.Execute(req, stream))

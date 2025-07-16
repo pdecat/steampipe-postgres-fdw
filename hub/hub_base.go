@@ -74,7 +74,7 @@ func (pwc *ParallelWorkerCoordinator) RegisterWorker(pid int) {
 	defer pwc.coordinatorMutex.Unlock()
 
 	pwc.activeWorkers[pid] = struct{}{}
-	log.Printf("[DEBUG] Parallel worker PID %d registered - total active: %d", pid, len(pwc.activeWorkers))
+	log.Printf("[DEBUG] Worker PID %d registered - total active: %d", pid, len(pwc.activeWorkers))
 }
 
 // UnregisterWorker removes a parallel worker from tracking
@@ -83,7 +83,7 @@ func (pwc *ParallelWorkerCoordinator) UnregisterWorker(pid int) {
 	defer pwc.coordinatorMutex.Unlock()
 
 	delete(pwc.activeWorkers, pid)
-	log.Printf("[DEBUG] Parallel worker PID %d unregistered - total active: %d", pid, len(pwc.activeWorkers))
+	log.Printf("[DEBUG] Worker PID %d unregistered - total active: %d", pid, len(pwc.activeWorkers))
 }
 
 // ShouldWorkerTimeout checks if a worker should timeout based on elapsed time
@@ -110,7 +110,7 @@ func (pwc *ParallelWorkerCoordinator) ResetExecution() {
 
 	pwc.executionStart = time.Now().Unix()
 	pwc.activeWorkers = make(map[int]struct{})
-	log.Printf("[DEBUG] Parallel execution reset - timeout: %d seconds", pwc.workerTimeout)
+	log.Printf("[DEBUG] Worker PID %d: Parallel execution reset - timeout: %d seconds", os.Getpid(), pwc.workerTimeout)
 }
 
 // CheckForIdleWorkers monitors for idle workers and handles timeouts
@@ -129,7 +129,7 @@ func (pwc *ParallelWorkerCoordinator) CheckForIdleWorkers() []int {
 	}
 
 	if len(idleWorkers) > 0 {
-		log.Printf("[WARN] Detected %d idle workers after %d second timeout", len(idleWorkers), pwc.workerTimeout)
+		log.Printf("[WARN] Worker PID %d: Detected %d idle workers after %d second timeout", os.Getpid(), len(idleWorkers), pwc.workerTimeout)
 	}
 
 	return idleWorkers
@@ -148,12 +148,12 @@ func (h *hubBase) MonitorWorkerTimeout(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				log.Printf("[DEBUG] Worker timeout monitor stopping")
+				log.Printf("[DEBUG] Worker PID %d: Worker timeout monitor stopping", os.Getpid())
 				return
 			case <-ticker.C:
 				idleWorkers := h.parallelWorkerCoordination.CheckForIdleWorkers()
 				if len(idleWorkers) > 0 {
-					log.Printf("[WARN] Found %d idle workers that may need termination: %v", len(idleWorkers), idleWorkers)
+					log.Printf("[WARN] Worker PID %d: Found %d idle workers that may need termination: %v", os.Getpid(), len(idleWorkers), idleWorkers)
 					// In a real implementation, we might send signals to these workers
 					// or implement other coordination mechanisms
 
@@ -164,7 +164,7 @@ func (h *hubBase) MonitorWorkerTimeout(ctx context.Context) {
 		}
 	}()
 
-	log.Printf("[DEBUG] Started worker timeout monitor with %d second timeout", h.parallelWorkerCoordination.workerTimeout)
+	log.Printf("[DEBUG] Worker PID %d: Started worker timeout monitor with %d second timeout", os.Getpid(), h.parallelWorkerCoordination.workerTimeout)
 }
 
 // RegisterParallelWorker implements the Hub interface
@@ -278,10 +278,10 @@ func (h *hubBase) getPathKeys(connectionSchema *proto.Schema, opts types.Options
 	// NOTE: the schema data has changed in SDK version 1.3 - we must handle plugins using legacy sdk explicitly
 	// check for legacy sdk versions
 	if tableSchema.ListCallKeyColumns != nil {
-		log.Printf("[TRACE] schema response include ListCallKeyColumns, it is using legacy protobuff interface ")
+		log.Printf("[TRACE] Worker PID %d: schema response include ListCallKeyColumns, it is using legacy protobuff interface ", os.Getpid())
 		pathKeys = types.LegacyKeyColumnsToPathKeys(tableSchema.ListCallKeyColumns, tableSchema.ListCallOptionalKeyColumns, allColumns)
 	} else if tableSchema.ListCallKeyColumnList != nil {
-		log.Printf("[TRACE] schema response include ListCallKeyColumnList, it is using the updated protobuff interface ")
+		log.Printf("[TRACE] Worker PID %d: schema response include ListCallKeyColumnList, it is using the updated protobuff interface ", os.Getpid())
 		// generate path keys if there are required list key columns
 		// this increases the chances that Postgres will generate a plan which provides the quals when querying the table
 		pathKeys = types.KeyColumnsToPathKeys(tableSchema.ListCallKeyColumnList, allColumns)
@@ -296,7 +296,7 @@ func (h *hubBase) getPathKeys(connectionSchema *proto.Schema, opts types.Options
 	//}
 	//pathKeys := types.MergePathKeys(getCallPathKeys, listCallPathKeys)
 
-	log.Printf("[TRACE] GetPathKeys for connection '%s`, table `%s` returning", connectionName, table)
+	log.Printf("[TRACE] Worker PID %d: GetPathKeys for connection '%s`, table `%s` returning", os.Getpid(), connectionName, table)
 	return pathKeys, nil
 }
 
@@ -389,7 +389,7 @@ func (h *hubBase) AddScanMetadata(i Iterator) {
 
 	queryTimestamp := iter.GetQueryTimestamp()
 
-	log.Printf("[INFO] AddScanMetadata for iterator %p query timestamp %d (%s)", iter, queryTimestamp, iter.GetConnectionName())
+	log.Printf("[INFO] Worker PID %d: AddScanMetadata for iterator %p query timestamp %d (%s)", os.Getpid(), iter, queryTimestamp, iter.GetConnectionName())
 
 	h.queryTiming.scanMetadataLock.Lock()
 	defer h.queryTiming.scanMetadataLock.Unlock()
@@ -431,42 +431,42 @@ func (h *hubBase) AddScanMetadata(i Iterator) {
 
 // Close shuts down all plugin clients
 func (h *hubBase) Close() {
-	log.Println("[TRACE] hub: close")
+	log.Printf("[TRACE] Worker PID %d: hub: close", os.Getpid())
 
 	if h.telemetryShutdownFunc != nil {
-		log.Println("[TRACE] shutdown telemetry")
+		log.Printf("[TRACE] Worker PID %d: shutdown telemetry", os.Getpid())
 		h.telemetryShutdownFunc()
 	}
 }
 
 // Abort shuts down currently running queries
 func (h *hubBase) Abort() {
-	log.Printf("[WARN] Abort - acquiring read lock to abort %d running iterators", len(h.runningIterators))
+	log.Printf("[WARN] Worker PID %d: Abort - acquiring read lock to abort %d running iterators", os.Getpid(), len(h.runningIterators))
 
 	// for all running iterators
 	h.runningIteratorsLock.RLock()
 	defer h.runningIteratorsLock.RUnlock()
 
 	iteratorCount := len(h.runningIterators)
-	log.Printf("[WARN] Abort - found %d running iterators to abort", iteratorCount)
+	log.Printf("[WARN] Worker PID %d: Abort - found %d running iterators to abort", os.Getpid(), iteratorCount)
 
 	for iter := range h.runningIterators {
-		log.Printf("[DEBUG] Abort - processing iterator %p, status: %s", iter, iter.Status())
+		log.Printf("[DEBUG] Worker PID %d: Abort - processing iterator %p, status: %s", os.Getpid(), iter, iter.Status())
 		// read the scan metadata from the iterator and add to our stack
 		h.AddScanMetadata(iter)
 		// close the iterator
-		log.Printf("[DEBUG] Abort - closing iterator %p", iter)
+		log.Printf("[DEBUG] Worker PID %d: Abort - closing iterator %p", os.Getpid(), iter)
 		iter.Close()
 	}
 	// clear running iterators
 	h.runningIterators = make(map[Iterator]struct{})
-	log.Printf("[WARN] Abort - completed, cleared %d iterators", iteratorCount)
+	log.Printf("[WARN] Worker PID %d: Abort - completed, cleared %d iterators", os.Getpid(), iteratorCount)
 }
 
 // settings
 
 func (h *hubBase) ApplySetting(key string, value string) error {
-	log.Printf("[TRACE] ApplySetting [%s => %s]", key, value)
+	log.Printf("[TRACE] Worker PID %d: ApplySetting [%s => %s]", os.Getpid(), key, value)
 	return h.cacheSettings.Apply(key, value)
 }
 
@@ -565,22 +565,22 @@ func (h *hubBase) traceContextForScan(table string, columns []string, limit int6
 
 	// Check if we have trace context from session variables
 	if traceContextStr, exists := opts["trace_context"]; exists && traceContextStr != "" {
-		log.Printf("[DEBUG] traceContextForScan received trace context: %s", traceContextStr)
+		log.Printf("[DEBUG] Worker PID %d: traceContextForScan received trace context: %s", os.Getpid(), traceContextStr)
 		if parentCtx := h.parseTraceContext(traceContextStr); parentCtx != nil {
 			baseCtx = parentCtx
-			log.Printf("[TRACE] Using parent trace context for scan of table: %s", table)
+			log.Printf("[TRACE] Worker PID %d: Using parent trace context for scan of table: %s", os.Getpid(), table)
 
 			// Verify the parent context has the expected trace ID
 			parentSpanCtx := trace.SpanContextFromContext(parentCtx)
 			if parentSpanCtx.IsValid() {
-				log.Printf("[DEBUG] Parent context TraceID: %s, SpanID: %s",
+				log.Printf("[DEBUG] Worker PID %d: Parent context TraceID: %s, SpanID: %s", os.Getpid(),
 					parentSpanCtx.TraceID().String(), parentSpanCtx.SpanID().String())
 			}
 		} else {
-			log.Printf("[WARN] Failed to parse trace context for table: %s", table)
+			log.Printf("[WARN] Worker PID %d: Failed to parse trace context for table: %s", os.Getpid(), table)
 		}
 	} else {
-		log.Printf("[DEBUG] No trace context found in options for table: %s", table)
+		log.Printf("[DEBUG] Worker PID %d: No trace context found in options for table: %s", os.Getpid(), table)
 	}
 
 	// Create span with potentially propagated context
@@ -597,7 +597,7 @@ func (h *hubBase) traceContextForScan(table string, columns []string, limit int6
 
 	spanCtx := span.SpanContext()
 	if spanCtx.IsValid() {
-		log.Printf("[DEBUG] Created span for table %s - TraceID: %s, SpanID: %s",
+		log.Printf("[DEBUG] Worker PID %d: Created span for table %s - TraceID: %s, SpanID: %s", os.Getpid(),
 			table, spanCtx.TraceID().String(), spanCtx.SpanID().String())
 	}
 
@@ -609,10 +609,10 @@ func (h *hubBase) traceContextForScan(table string, columns []string, limit int6
 // - Session variables: "traceparent=00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01;tracestate=rojo=00f067aa0ba902b7"
 // - SQLcommenter: "traceparent='00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',tracestate='rojo=00f067aa0ba902b7'"
 func (h *hubBase) parseTraceContext(traceContextString string) context.Context {
-	log.Printf("[DEBUG] parseTraceContext called with: %s", traceContextString)
+	log.Printf("[DEBUG] Worker PID %d: parseTraceContext called with: %s", os.Getpid(), traceContextString)
 
 	if traceContextString == "" {
-		log.Printf("[DEBUG] Empty trace context string")
+		log.Printf("[DEBUG] Worker PID %d: Empty trace context string", os.Getpid())
 		return nil
 	}
 
@@ -623,11 +623,11 @@ func (h *hubBase) parseTraceContext(traceContextString string) context.Context {
 	if strings.Contains(traceContextString, ",") {
 		// SQLcommenter format: "traceparent='...',tracestate='...'"
 		parts = strings.Split(traceContextString, ",")
-		log.Printf("[DEBUG] Detected SQLcommenter format, split into %d parts: %v", len(parts), parts)
+		log.Printf("[DEBUG] Worker PID %d: Detected SQLcommenter format, split into %d parts: %v", os.Getpid(), len(parts), parts)
 	} else {
 		// Session variable format: "traceparent=..;tracestate=.."
 		parts = strings.Split(traceContextString, ";")
-		log.Printf("[DEBUG] Detected session variable format, split into %d parts: %v", len(parts), parts)
+		log.Printf("[DEBUG] Worker PID %d: Detected session variable format, split into %d parts: %v", os.Getpid(), len(parts), parts)
 	}
 
 	for _, part := range parts {
@@ -639,20 +639,20 @@ func (h *hubBase) parseTraceContext(traceContextString string) context.Context {
 			if (strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'")) ||
 				(strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) {
 				value = value[1 : len(value)-1]
-				log.Printf("[DEBUG] Removed quotes from value: %s", value)
+				log.Printf("[DEBUG] Worker PID %d: Removed quotes from value: %s", os.Getpid(), value)
 			}
 
 			carrier[key] = value
-			log.Printf("[DEBUG] Added to carrier: %s = %s", key, value)
+			log.Printf("[DEBUG] Worker PID %d: Added to carrier: %s = %s", os.Getpid(), key, value)
 		} else {
-			log.Printf("[DEBUG] Skipping invalid part: %s", part)
+			log.Printf("[DEBUG] Worker PID %d: Skipping invalid part: %s", os.Getpid(), part)
 		}
 	}
 
-	log.Printf("[DEBUG] Final carrier contents: %v", carrier)
+	log.Printf("[DEBUG] Worker PID %d: Final carrier contents: %v", os.Getpid(), carrier)
 
 	if len(carrier) == 0 {
-		log.Printf("[WARN] No valid trace context found in: %s", traceContextString)
+		log.Printf("[WARN] Worker PID %d: No valid trace context found in: %s", os.Getpid(), traceContextString)
 		return nil
 	}
 
@@ -666,12 +666,12 @@ func (h *hubBase) parseTraceContext(traceContextString string) context.Context {
 	// Verify we actually got a valid span context
 	spanCtx := trace.SpanContextFromContext(extractedCtx)
 	if spanCtx.IsValid() {
-		log.Printf("[TRACE] Successfully extracted trace context - TraceID: %s, SpanID: %s",
+		log.Printf("[TRACE] Worker PID %d: Successfully extracted trace context - TraceID: %s, SpanID: %s", os.Getpid(),
 			spanCtx.TraceID().String(), spanCtx.SpanID().String())
 		return extractedCtx
 	}
 
-	log.Printf("[WARN] Extracted trace context is not valid - carrier was: %v", carrier)
+	log.Printf("[WARN] Worker PID %d: Extracted trace context is not valid - carrier was: %v", os.Getpid(), carrier)
 	return nil
 }
 
@@ -704,31 +704,31 @@ func (h *hubBase) shouldPushdownLimit(table string, qualMap map[string]*proto.Qu
 	for col, quals := range qualMap {
 		// check whether this qual is declared as a key column for this table
 		if k, ok := keyColumnMap[col]; ok {
-			log.Printf("[TRACE] shouldPushdownLimit found key column for column %s: %v", col, k)
+			log.Printf("[TRACE] Worker PID %d: shouldPushdownLimit found key column for column %s: %v", os.Getpid(), col, k)
 
 			// check whether every qual for this column has a supported operator
 			for _, q := range quals.Quals {
 				operator := q.GetStringValue()
 				if !slices.Contains(k.Operators, operator) {
-					log.Printf("[INFO] operator '%s' not supported for column '%s'. NOT pushing down limit", operator, col)
+					log.Printf("[INFO] Worker PID %d: operator '%s' not supported for column '%s'. NOT pushing down limit", os.Getpid(), operator, col)
 					return false
 				}
-				log.Printf("[TRACE] shouldPushdownLimit operator '%s' is supported for column '%s'.", operator, col)
+				log.Printf("[TRACE] Worker PID %d: shouldPushdownLimit operator '%s' is supported for column '%s'.", os.Getpid(), operator, col)
 			}
 		} else {
 			// no key column defined for this qual - DO NOT push down the limit
-			log.Printf("[INFO] shouldPushdownLimit no key column found for column '%s'. NOT pushing down limit", col)
+			log.Printf("[INFO] Worker PID %d: shouldPushdownLimit no key column found for column '%s'. NOT pushing down limit", os.Getpid(), col)
 			return false
 		}
 	}
 
 	// all quals are supported - push down limit
-	log.Printf("[INFO] shouldPushdownLimit all quals are supported - pushing down limit")
+	log.Printf("[INFO] Worker PID %d: shouldPushdownLimit all quals are supported - pushing down limit", os.Getpid())
 	return true
 }
 
 func (h *hubBase) initialiseTelemetry() error {
-	log.Printf("[TRACE] init telemetry")
+	log.Printf("[TRACE] Worker PID %d: init telemetry", os.Getpid())
 	shutdownTelemetry, err := telemetry.Init(FdwName)
 	if err != nil {
 		return fmt.Errorf("failed to initialise telemetry: %s", err.Error())
@@ -741,7 +741,7 @@ func (h *hubBase) initialiseTelemetry() error {
 		metric.WithDescription("The total number of hydrate calls"),
 	)
 	if err != nil {
-		log.Printf("[WARN] init telemetry failed to create hydrateCallsCounter")
+		log.Printf("[WARN] Worker PID %d: init telemetry failed to create hydrateCallsCounter", os.Getpid())
 		return err
 	}
 	h.hydrateCallsCounter = hydrateCalls
@@ -792,7 +792,7 @@ func (h *hubBase) HandleLegacyCacheCommand(command string) error {
 		return err
 	}
 
-	log.Printf("[TRACE] HandleLegacyCacheCommand %s", command)
+	log.Printf("[TRACE] Worker PID %d: HandleLegacyCacheCommand %s", os.Getpid(), command)
 
 	switch command {
 	case constants.LegacyCommandCacheClear:
