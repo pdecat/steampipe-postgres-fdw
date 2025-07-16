@@ -41,6 +41,25 @@ var logger hclog.Logger
 //export goInit
 func goInit() {}
 
+// Register a parallel worker for timeout monitoring
+// This is called from C code when a parallel worker is initialized
+//
+//export goFdwRegisterParallelWorker
+func goFdwRegisterParallelWorker(pid C.int) {
+	workerPid := int(pid)
+	log.Printf("[DEBUG] Worker PID %d: goFdwRegisterParallelWorker() called - registering for timeout monitoring", workerPid)
+	
+	// Get the current hub instance and register the worker
+	currentHub := hub.GetHub()
+	if currentHub != nil {
+		// Use the interface method to register the worker
+		currentHub.RegisterParallelWorker(workerPid)
+		log.Printf("[DEBUG] Worker PID %d: Successfully registered with parallel worker coordinator", workerPid)
+	} else {
+		log.Printf("[WARN] Worker PID %d: No hub instance available for worker registration", workerPid)
+	}
+}
+
 func init() {
 	if logger != nil {
 		return
