@@ -20,6 +20,7 @@ import "C"
 
 import (
 	"log"
+	"os"
 	"sync"
 	"unsafe"
 
@@ -41,46 +42,46 @@ var (
 )
 
 func SaveExecState(s *ExecState) unsafe.Pointer {
-	log.Printf("[DEBUG] SaveExecState - acquiring write lock for session %d", si+1)
+	log.Printf("[DEBUG] Worker PID %d: SaveExecState - acquiring write lock for session %d", os.Getpid(), si+1)
 	mu.Lock()
 	si++
 	i := si
 	sess[i] = s
-	log.Printf("[DEBUG] SaveExecState - saved session %d, total sessions: %d", i, len(sess))
+	log.Printf("[DEBUG] Worker PID %d: SaveExecState - saved session %d, total sessions: %d", os.Getpid(), i, len(sess))
 	mu.Unlock()
 	cs := C.makeState()
 	cs.tok = C.uint(i)
-	log.Printf("[DEBUG] SaveExecState - completed for session %d", i)
+	log.Printf("[DEBUG] Worker PID %d: SaveExecState - completed for session %d", os.Getpid(), i)
 	return unsafe.Pointer(cs)
 }
 
 func ClearExecState(p unsafe.Pointer) {
 	if p == nil {
-		log.Printf("[DEBUG] ClearExecState - received nil pointer")
+		log.Printf("[DEBUG] Worker PID %d: ClearExecState - received nil pointer", os.Getpid())
 		return
 	}
 	cs := (*C.GoFdwExecutionState)(p)
 	i := uint64(cs.tok)
-	log.Printf("[DEBUG] ClearExecState - acquiring write lock to clear session %d", i)
+	log.Printf("[DEBUG] Worker PID %d: ClearExecState - acquiring write lock to clear session %d", os.Getpid(), i)
 	mu.Lock()
 	delete(sess, i)
-	log.Printf("[DEBUG] ClearExecState - cleared session %d, remaining sessions: %d", i, len(sess))
+	log.Printf("[DEBUG] Worker PID %d: ClearExecState - cleared session %d, remaining sessions: %d", os.Getpid(), i, len(sess))
 	mu.Unlock()
 	C.freeState(cs)
-	log.Printf("[DEBUG] ClearExecState - completed for session %d", i)
+	log.Printf("[DEBUG] Worker PID %d: ClearExecState - completed for session %d", os.Getpid(), i)
 }
 
 func GetExecState(p unsafe.Pointer) *ExecState {
 	if p == nil {
-		log.Printf("[DEBUG] GetExecState - received nil pointer")
+		log.Printf("[DEBUG] Worker PID %d: GetExecState - received nil pointer", os.Getpid())
 		return nil
 	}
 	cs := (*C.GoFdwExecutionState)(p)
 	i := uint64(cs.tok)
-	log.Printf("[DEBUG] GetExecState - acquiring read lock for session %d", i)
+	log.Printf("[DEBUG] Worker PID %d: GetExecState - acquiring read lock for session %d", os.Getpid(), i)
 	mu.RLock()
 	s := sess[i]
-	log.Printf("[DEBUG] GetExecState - retrieved session %d, found: %v", i, s != nil)
+	log.Printf("[DEBUG] Worker PID %d: GetExecState - retrieved session %d, found: %v", os.Getpid(), i, s != nil)
 	mu.RUnlock()
 	return s
 }
