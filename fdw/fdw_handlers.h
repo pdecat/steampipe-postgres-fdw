@@ -15,6 +15,13 @@ static ForeignScan *fdwGetForeignPlan(
     Plan *outer_plan
 );
 
+// Parallel execution callback declarations
+static Size fdwEstimateDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt);
+static void fdwInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate);
+static void fdwReInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate);
+static void fdwInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc, void *coordinate);
+static void fdwShutdownForeignScan(ForeignScanState *node);
+
 // Define our handling functions with Postgres, following the V1 protocol.
 PG_FUNCTION_INFO_V1(fdw_handler);
 PG_FUNCTION_INFO_V1(fdw_validator);
@@ -33,6 +40,13 @@ Datum fdw_handler(PG_FUNCTION_ARGS) {
   fdw_routine->EndForeignScan = goFdwEndForeignScan;
   fdw_routine->ImportForeignSchema = goFdwImportForeignSchema;
   fdw_routine->ExecForeignInsert = goFdwExecForeignInsert;
+
+  // Add parallel execution callbacks
+  fdw_routine->EstimateDSMForeignScan = fdwEstimateDSMForeignScan;
+  fdw_routine->InitializeDSMForeignScan = fdwInitializeDSMForeignScan;
+  fdw_routine->ReInitializeDSMForeignScan = fdwReInitializeDSMForeignScan;
+  fdw_routine->InitializeWorkerForeignScan = fdwInitializeWorkerForeignScan;
+  fdw_routine->ShutdownForeignScan = fdwShutdownForeignScan;
 
 PG_RETURN_POINTER(fdw_routine);
 }
