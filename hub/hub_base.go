@@ -167,6 +167,26 @@ func (h *hubBase) MonitorWorkerTimeout(ctx context.Context) {
 	log.Printf("[DEBUG] Started worker timeout monitor with %d second timeout", h.parallelWorkerCoordination.workerTimeout)
 }
 
+// RegisterParallelWorker implements the Hub interface
+func (h *hubBase) RegisterParallelWorker(pid int) {
+	log.Printf("[DEBUG] Worker PID %d: RegisterParallelWorker() called", pid)
+	if h.parallelWorkerCoordination != nil {
+		h.parallelWorkerCoordination.RegisterWorker(pid)
+	} else {
+		log.Printf("[DEBUG] Worker PID %d: No parallel worker coordination available", pid)
+	}
+}
+
+// UnregisterParallelWorker implements the Hub interface
+func (h *hubBase) UnregisterParallelWorker(pid int) {
+	log.Printf("[DEBUG] Worker PID %d: UnregisterParallelWorker() called", pid)
+	if h.parallelWorkerCoordination != nil {
+		h.parallelWorkerCoordination.UnregisterWorker(pid)
+	} else {
+		log.Printf("[DEBUG] Worker PID %d: No parallel worker coordination available", pid)
+	}
+}
+
 func newHubBase(enableScanMetadata bool) *hubBase {
 	h := &hubBase{
 		runningIterators:           make(map[Iterator]struct{}),
@@ -290,14 +310,12 @@ func (h *hubBase) Explain(columns []string, quals []*proto.Qual, sortKeys []stri
 
 // StartScan starts a scan
 func (h *hubBase) StartScan(i Iterator) error {
-	log.Printf("[DEBUG] StartScan - beginning for iterator %p", i)
+	pid := os.Getpid()
+	log.Printf("[DEBUG] Worker PID %d: StartScan - beginning for iterator %p", pid, i)
 
-	// Register worker with parallel coordination if enabled
-	if h.parallelWorkerCoordination != nil {
-		pid := os.Getpid()
-		h.parallelWorkerCoordination.RegisterWorker(pid)
-		log.Printf("[DEBUG] StartScan - registered parallel worker PID %d", pid)
-	}
+	// Note: Worker registration now happens in the C parallel callback (fdwInitializeWorkerForeignScan)
+	// This ensures ALL workers are registered, not just those that get assigned work
+	// This fixes the core issue where idle workers were never registered
 
 	// if iterator is not a pluginIterator, do nothing
 	// (i.e. is it an InMemoryIterator
@@ -306,53 +324,53 @@ func (h *hubBase) StartScan(i Iterator) error {
 	iterator, ok := i.(pluginIterator)
 	if !ok {
 		// unexpected
-		log.Printf("[WARN] StartScan called for non-pluginIterator %T", i)
+		log.Printf("[WARN] Worker PID %d: StartScan called for non-pluginIterator %T", pid, i)
 		return nil
 	}
 
 	// ask the iterator for the executor interface
 	// (the iterator just returns itself - we need to do it this way because of the way nested structs work )
-	log.Printf("[DEBUG] StartScan - about to call iterator.Start() for %p", i)
+	log.Printf("[DEBUG] Worker PID %d: StartScan - about to call iterator.Start() for %p", pid, i)
 	iterator.Start(i.(pluginExecutor))
-	log.Printf("[DEBUG] StartScan - iterator.Start() completed for %p", i)
+	log.Printf("[DEBUG] Worker PID %d: StartScan - iterator.Start() completed for %p", pid, i)
 
 	// add iterator to running list
-	log.Printf("[DEBUG] StartScan - running iterator count before add: %d", len(h.runningIterators))
+	log.Printf("[DEBUG] Worker PID %d: StartScan - running iterator count before add: %d", pid, len(h.runningIterators))
 	h.addIterator(iterator)
-	log.Printf("[DEBUG] StartScan - running iterator count after add: %d", len(h.runningIterators))
-	log.Printf("[DEBUG] StartScan - completed for iterator %p", i)
+	log.Printf("[DEBUG] Worker PID %d: StartScan - running iterator count after add: %d", pid, len(h.runningIterators))
+	log.Printf("[DEBUG] Worker PID %d: StartScan - completed for iterator %p", pid, i)
 
 	return nil
 }
 
 // EndScan is called when Postgres terminates the scan (because it has received enough rows of data)
 func (h *hubBase) EndScan(iter Iterator, limit int64) {
-	log.Printf("[DEBUG] EndScan - starting for iterator %p, status: %s", iter, iter.Status())
-	log.Printf("[DEBUG] EndScan - running iterator count before cleanup: %d", len(h.runningIterators))
+	pid := os.Getpid()
+	log.Printf("[DEBUG] Worker PID %d: EndScan - starting for iterator %p, status: %s", pid, iter, iter.Status())
+	log.Printf("[DEBUG] Worker PID %d: EndScan - running iterator count before cleanup: %d", pid, len(h.runningIterators))
 
 	// Unregister worker from parallel coordination if enabled
 	if h.parallelWorkerCoordination != nil {
-		pid := os.Getpid()
 		h.parallelWorkerCoordination.UnregisterWorker(pid)
-		log.Printf("[DEBUG] EndScan - unregistered parallel worker PID %d", pid)
+		log.Printf("[DEBUG] Worker PID %d: EndScan - unregistered parallel worker", pid)
 	}
 
 	// is the iterator still running? If so it means postgres is stopping a scan before all rows have been read
 	if iter.Status() == QueryStatusStarted {
-		log.Printf("[INFO] ending scan before iterator complete - limit: %v, iterator: %p", limit, iter)
+		log.Printf("[INFO] Worker PID %d: ending scan before iterator complete - limit: %v, iterator: %p", pid, limit, iter)
 		// we normally add the scan metadata when the scan completes - if the scan has not completed, we need to
 		// add the metadata here
 		h.AddScanMetadata(iter)
-		log.Printf("[DEBUG] EndScan - closing iterator %p", iter)
+		log.Printf("[DEBUG] Worker PID %d: EndScan - closing iterator %p", pid, iter)
 		iter.Close()
 	} else {
-		log.Printf("[DEBUG] EndScan - iterator status is %s (not STARTED) for %p", iter.Status(), iter)
+		log.Printf("[DEBUG] Worker PID %d: EndScan - iterator status is %s (not STARTED) for %p", pid, iter.Status(), iter)
 	}
 
-	log.Printf("[DEBUG] EndScan - removing iterator %p from running list", iter)
+	log.Printf("[DEBUG] Worker PID %d: EndScan - removing iterator %p from running list", pid, iter)
 	h.RemoveIterator(iter)
-	log.Printf("[DEBUG] EndScan - running iterator count after cleanup: %d", len(h.runningIterators))
-	log.Printf("[INFO] EndScan - completed for iterator %p", iter)
+	log.Printf("[DEBUG] Worker PID %d: EndScan - running iterator count after cleanup: %d", pid, len(h.runningIterators))
+	log.Printf("[INFO] Worker PID %d: EndScan - completed for iterator %p", pid, iter)
 }
 
 // AddScanMetadata adds the scan metadata from the given iterator to the hubs array
