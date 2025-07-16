@@ -40,6 +40,9 @@ void signal_handler(int sig) {
  */
 void _PG_init(void)
 {
+    // Log when the extension is loaded by any process
+    elog(LOG, "[DEBUG] Worker PID %d: _PG_init() called - FDW extension loading", getpid());
+
     // TACTICAL
     // certain postgres errors (`out of shared memory`, `schema already exists`)
     // sometimes in a signal 16 being sent from the C code
