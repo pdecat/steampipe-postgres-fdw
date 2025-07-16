@@ -2,6 +2,7 @@ package types
 
 import (
 	"log"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -148,7 +149,7 @@ func columnPathsToPathKeys(columnPaths [][]string, allColumns []string, baseCost
 		}
 	}
 
-	log.Printf("[TRACE] columnPathsToPathKeys %d column paths %d all columns, %d pathkeys", len(columnPaths), len(allColumns), len(res))
+	log.Printf("[TRACE] Worker PID %d: columnPathsToPathKeys %d column paths %d all columns, %d pathkeys", os.Getpid(), len(columnPaths), len(allColumns), len(res))
 
 	return res
 }
