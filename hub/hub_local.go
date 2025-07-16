@@ -49,7 +49,7 @@ func newLocalHub() (*HubLocal, error) {
 }
 
 func (l *HubLocal) SetConnectionConfig(connectionName, configString string) error {
-	log.Printf("[INFO] HubLocal SetConnectionConfig: connection: %s, config: %s", connectionName, configString)
+	log.Printf("[INFO] Worker PID %d: HubLocal SetConnectionConfig: connection: %s, config: %s", os.Getpid(), connectionName, configString)
 
 	l.connections[connectionName] =
 		&proto.ConnectionConfig{
@@ -67,7 +67,7 @@ func (l *HubLocal) SetConnectionConfig(connectionName, configString string) erro
 }
 
 func (l *HubLocal) UpdateConnectionConfig(connectionName, configString string) error {
-	log.Printf("[INFO] HubLocal UpdateConnectionConfig: connection: %s, config: %s", connectionName, configString)
+	log.Printf("[INFO] Worker PID %d: HubLocal UpdateConnectionConfig: connection: %s, config: %s", os.Getpid(), connectionName, configString)
 
 	// if the connection already exists and the config is the same, do nothing
 	// this situation could arise when a session is restarted, the server options are loaded again, and
@@ -97,11 +97,11 @@ func (l *HubLocal) LoadConnectionConfig() (bool, error) {
 }
 
 func (l *HubLocal) GetSchema(_, connectionName string) (*proto.Schema, error) {
-	log.Printf("[INFO] GetSchema")
+	log.Printf("[INFO] Worker PID %d: GetSchema", os.Getpid())
 	res, err := l.plugin.GetSchema(&proto.GetSchemaRequest{Connection: connectionName})
 
 	if err != nil {
-		log.Printf("[INFO] GetSchema retry")
+		log.Printf("[INFO] Worker PID %d: GetSchema retry", os.Getpid())
 		// TODO tactical - if no connection config has been set for this connection, set now
 		if err := l.SetConnectionConfig(connectionName, ""); err != nil {
 
@@ -109,7 +109,7 @@ func (l *HubLocal) GetSchema(_, connectionName string) (*proto.Schema, error) {
 		}
 		res, err = l.plugin.GetSchema(&proto.GetSchemaRequest{Connection: connectionName})
 		if err != nil {
-			log.Printf("[INFO] GetSchema retry failed")
+			log.Printf("[INFO] Worker PID %d: GetSchema retry failed", os.Getpid())
 			return nil, err
 		}
 	}
@@ -121,7 +121,7 @@ func (l *HubLocal) GetIterator(columns []string, quals *proto.Quals, unhandledRe
 	qualMap, err := buildQualMap(quals)
 	connectionName := opts["connection"]
 	table := opts["table"]
-	log.Printf("[TRACE] RemoteHub GetIterator() table '%s'", table)
+	log.Printf("[TRACE] Worker PID %d: RemoteHub GetIterator() table '%s'", os.Getpid(), table)
 
 	if connectionName == constants.InternalSchema || connectionName == constants.LegacyCommandSchema {
 		return l.executeCommandScan(connectionName, table, queryTimestamp)
@@ -132,10 +132,10 @@ func (l *HubLocal) GetIterator(columns []string, quals *proto.Quals, unhandledRe
 	iterator, err := l.startScanForConnection(connectionName, table, qualMap, unhandledRestrictions, columns, limit, sortOrder, queryTimestamp, scanTraceCtx)
 
 	if err != nil {
-		log.Printf("[TRACE] RemoteHub GetIterator() failed :( %s", err)
+		log.Printf("[TRACE] Worker PID %d: RemoteHub GetIterator() failed :( %s", os.Getpid(), err)
 		return nil, err
 	}
-	log.Printf("[TRACE] RemoteHub GetIterator() created iterator (%p)", iterator)
+	log.Printf("[TRACE] Worker PID %d: RemoteHub GetIterator() created iterator (%p)", os.Getpid(), iterator)
 
 	return iterator, nil
 }
@@ -163,7 +163,7 @@ func (l *HubLocal) ProcessImportForeignSchemaOptions(opts types.Options, connect
 	// do we already have this connection
 	connectionConfig, ok := l.connections[connection]
 	if ok {
-		log.Println("[INFO] connection already exists, updating ")
+		log.Printf("[INFO] Worker PID %d: connection already exists, updating", os.Getpid())
 		// we have already set the config - update it
 		connectionConfig.Config = config
 		return l.UpdateConnectionConfig(connection, config)
@@ -198,14 +198,14 @@ func (l *HubLocal) startScanForConnection(connectionName string, table string, q
 	}
 
 	if len(qualMap) > 0 {
-		log.Printf("[INFO] connection '%s', table '%s', quals %s", connectionName, table, grpc.QualMapToString(qualMap, true))
+		log.Printf("[INFO] Worker PID %d: connection '%s', table '%s', quals %s", os.Getpid(), connectionName, table, grpc.QualMapToString(qualMap, true))
 	} else {
-		log.Println("[INFO] --------")
-		log.Println("[INFO] no quals")
-		log.Println("[INFO] --------")
+		log.Printf("[INFO] Worker PID %d: --------", os.Getpid())
+		log.Printf("[INFO] Worker PID %d: no quals", os.Getpid())
+		log.Printf("[INFO] Worker PID %d: --------", os.Getpid())
 	}
 
-	log.Printf("[TRACE] startScanForConnection creating a new scan iterator")
+	log.Printf("[TRACE] Worker PID %d: startScanForConnection creating a new scan iterator", os.Getpid())
 	iterator := newScanIteratorLocal(l, connectionName, table, l.pluginName, connectionLimitMap, qualMap, columns, limit, sortOrder, queryTimestamp, scanTraceCtx)
 	return iterator, nil
 }
@@ -221,7 +221,7 @@ func (l *HubLocal) buildConnectionLimitMap(connection, table string, qualMap map
 	// for a static schema, the limit will be the same for all connections (i.e. we either pushdown for all or none)
 	// check once whether we should push down
 	if limit != -1 && schemaMode == plugin.SchemaModeStatic {
-		log.Printf("[TRACE] static schema - using same limit for all connections")
+		log.Printf("[TRACE] Worker PID %d: static schema - using same limit for all connections", os.Getpid())
 		if !l.shouldPushdownLimit(table, qualMap, unhandledRestrictions, connectionSchema) {
 			limit = -1
 		}
@@ -232,7 +232,7 @@ func (l *HubLocal) buildConnectionLimitMap(connection, table string, qualMap map
 	connectionLimit := limit
 	// if schema mode is dynamic, check whether we should push down for each connection
 	if schemaMode == plugin.SchemaModeDynamic && !l.shouldPushdownLimit(table, qualMap, unhandledRestrictions, connectionSchema) {
-		log.Printf("[INFO] not pushing limit down for connection %s", connection)
+		log.Printf("[INFO] Worker PID %d: not pushing limit down for connection %s", os.Getpid(), connection)
 		connectionLimit = -1
 	}
 	connectionLimitMap[connection] = connectionLimit
@@ -244,9 +244,9 @@ func (l *HubLocal) clearConnectionCache(connection string) error {
 
 	_, err := l.plugin.SetConnectionCacheOptions(&proto.SetConnectionCacheOptionsRequest{ClearCacheForConnection: connection})
 	if err != nil {
-		log.Printf("[WARN] clearConnectionCache failed for connection %s: SetConnectionCacheOptions returned %s", connection, err)
+		log.Printf("[WARN] Worker PID %d: clearConnectionCache failed for connection %s: SetConnectionCacheOptions returned %s", os.Getpid(), connection, err)
 	}
-	log.Printf("[INFO] clear connection cache succeeded")
+	log.Printf("[INFO] Worker PID %d: clear connection cache succeeded", os.Getpid())
 	return err
 }
 
@@ -269,7 +269,7 @@ func (l *HubLocal) cacheEnabled(s string) bool {
 }
 
 func (l *HubLocal) cacheTTL(s string) time.Duration {
-	log.Printf("[INFO] cacheTTL 1")
+	log.Printf("[INFO] Worker PID %d: cacheTTL 1", os.Getpid())
 	// if the cache ttl has been overridden, then enforce the value
 	if l.cacheSettings.Ttl != nil {
 		return *l.cacheSettings.Ttl
@@ -291,7 +291,7 @@ func (l *HubLocal) getServerCacheEnabled() bool {
 		}
 	}
 
-	log.Printf("[INFO] Hub.getServerCacheEnabled returning %v", res)
+	log.Printf("[INFO] Worker PID %d: Hub.getServerCacheEnabled returning %v", os.Getpid(), res)
 
 	return res
 }
