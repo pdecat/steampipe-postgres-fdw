@@ -304,13 +304,14 @@ func goFdwBeginForeignScan(node *C.ForeignScanState, eflags C.int) {
 	// read the explain flag
 	explain := eflags&C.EXEC_FLAG_EXPLAIN_ONLY == C.EXEC_FLAG_EXPLAIN_ONLY
 
+	log.Printf("[DEBUG] Worker PID %d: goFdwBeginForeignScan() called", os.Getpid())
 	logging.LogTime("[fdw] BeginForeignScan start")
 	rel := BuildRelation(node.ss.ss_currentRelation)
 	opts := GetFTableOptions(rel.ID)
 	// get the connection name - this is the namespace (i.e. the local schema)
 	opts["connection"] = rel.Namespace
 
-	log.Printf("[INFO] goFdwBeginForeignScan, connection '%s', table '%s', explain: %v \n", opts["connection"], opts["table"], explain)
+	log.Printf("[INFO] Worker PID %d: goFdwBeginForeignScan, connection '%s', table '%s', explain: %v", os.Getpid(), opts["connection"], opts["table"], explain)
 
 	// Inner recover: catches panics during main scan processing
 	defer func() {
@@ -412,10 +413,11 @@ func getSortColumns(state *C.FdwExecState) []*proto.SortColumn {
 func goFdwIterateForeignScan(node *C.ForeignScanState) *C.TupleTableSlot {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[WARN] goFdwIterateForeignScan failed with panic: %v", r)
+			log.Printf("[WARN] Worker PID %d: goFdwIterateForeignScan failed with panic: %v", os.Getpid(), r)
 			FdwError(fmt.Errorf("%v", r))
 		}
 	}()
+	log.Printf("[DEBUG] Worker PID %d: goFdwIterateForeignScan() called", os.Getpid())
 	logging.LogTime("[fdw] IterateForeignScan start")
 
 	s := GetExecState(node.fdw_state)
