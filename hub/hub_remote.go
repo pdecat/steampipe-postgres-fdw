@@ -56,7 +56,7 @@ func newRemoteHub() (*RemoteHub, error) {
 	}
 	app_specific.InstallDir = steampipeDir
 
-	log.Printf("[INFO] newRemoteHub RemoteHub.LoadConnectionConfig ")
+	log.Printf("[INFO] Worker PID %d: newRemoteHub RemoteHub.LoadConnectionConfig", os.Getpid())
 	if _, err := hub.LoadConnectionConfig(); err != nil {
 		// returning the error would panic init() and kill the backend; each statement reloads the config and fails with the real error instead
 		log.Printf("[ERROR] newRemoteHub RemoteHub.LoadConnectionConfig failed, continuing: %v", err)
@@ -82,10 +82,10 @@ func getInstallDirectory() (string, error) {
 
 // GetSchema returns the schema for a name. Load the plugin for the connection if needed
 func (h *RemoteHub) GetSchema(remoteSchema string, localSchema string) (*proto.Schema, error) {
-	log.Printf("[TRACE] RemoteHub GetSchema %s %s", remoteSchema, localSchema)
+	log.Printf("[TRACE] Worker PID %d: RemoteHub GetSchema %s %s", os.Getpid(), remoteSchema, localSchema)
 	pluginFQN := remoteSchema
 	connectionName := localSchema
-	log.Printf("[TRACE] getSchema remoteSchema: %s, name %s\n", remoteSchema, connectionName)
+	log.Printf("[TRACE] Worker PID %d: getSchema remoteSchema: %s, name %s", os.Getpid(), remoteSchema, connectionName)
 
 	return h.connections.getSchema(pluginFQN, connectionName)
 }
@@ -96,7 +96,7 @@ func (h *RemoteHub) GetIterator(columns []string, quals *proto.Quals, unhandledR
 	qualMap, err := buildQualMap(quals)
 	connectionName := opts["connection"]
 	table := opts["table"]
-	log.Printf("[TRACE] RemoteHub GetIterator() table '%s'", table)
+	log.Printf("[TRACE] Worker PID %d: RemoteHub GetIterator() table '%s'", os.Getpid(), table)
 
 	if connectionName == constants.InternalSchema || connectionName == constants.LegacyCommandSchema {
 		return h.executeCommandScan(connectionName, table, queryTimestamp)
@@ -107,26 +107,26 @@ func (h *RemoteHub) GetIterator(columns []string, quals *proto.Quals, unhandledR
 	iterator, err := h.startScanForConnection(connectionName, table, qualMap, unhandledRestrictions, columns, limit, sortOrder, queryTimestamp, scanTraceCtx)
 
 	if err != nil {
-		log.Printf("[TRACE] RemoteHub GetIterator() failed :( %s", err)
+		log.Printf("[TRACE] Worker PID %d: RemoteHub GetIterator() failed :( %s", os.Getpid(), err)
 		return nil, err
 	}
-	log.Printf("[TRACE] RemoteHub GetIterator() created iterator (%p)", iterator)
+	log.Printf("[TRACE] Worker PID %d: RemoteHub GetIterator() created iterator (%p)", os.Getpid(), iterator)
 
 	return iterator, nil
 }
 
 // LoadConnectionConfig loads the connection config and returns whether it has changed
 func (h *RemoteHub) LoadConnectionConfig() (bool, error) {
-	log.Printf("[INFO] RemoteHub.LoadConnectionConfig ")
+	log.Printf("[INFO] Worker PID %d: RemoteHub.LoadConnectionConfig", os.Getpid())
 	// load connection conFig
 	connectionConfig, errorsAndWarnings := steampipeconfig.LoadConnectionConfig(context.Background())
 	if errorsAndWarnings.GetError() != nil {
 		// GlobalConfig must stay non-nil: hub methods dereference it directly with no nil check.
 		if steampipeconfig.GlobalConfig == nil {
-			log.Printf("[ERROR] LoadConnectionConfig failed, no connections loaded: %v", errorsAndWarnings.GetError())
+			log.Printf("[ERROR] Worker PID %d: LoadConnectionConfig failed, no connections loaded: %v", os.Getpid(), errorsAndWarnings.GetError())
 			steampipeconfig.GlobalConfig = steampipeconfig.NewSteampipeConfig("")
 		} else {
-			log.Printf("[ERROR] LoadConnectionConfig failed, keeping the last good connection config: %v", errorsAndWarnings.GetError())
+			log.Printf("[ERROR] Worker PID %d: LoadConnectionConfig failed, keeping the last good connection config: %v", os.Getpid(), errorsAndWarnings.GetError())
 		}
 		return false, errorsAndWarnings.GetError()
 	}
@@ -148,7 +148,7 @@ func (h *RemoteHub) GetPathKeys(opts types.Options) ([]types.PathKey, error) {
 	connectionName := opts["connection"]
 	table := opts["table"]
 
-	log.Printf("[TRACE] hub.GetPathKeys for connection '%s`, table `%s`", connectionName, table)
+	log.Printf("[TRACE] Worker PID %d: hub.GetPathKeys for connection '%s`, table `%s`", os.Getpid(), connectionName, table)
 
 	// get the schema for this connection
 	connectionPlugin, err := h.getConnectionPlugin(connectionName)
@@ -175,11 +175,11 @@ func (h *RemoteHub) startScanForConnection(connectionName string, table string, 
 		}
 	}()
 
-	log.Printf("[INFO] RemoteHub startScanForConnection '%s' limit %d", connectionName, limit)
+	log.Printf("[INFO] Worker PID %d: RemoteHub startScanForConnection '%s' limit %d", os.Getpid(), connectionName, limit)
 	// get connection plugin for this connection
 	connectionPlugin, err := h.getConnectionPlugin(connectionName)
 	if err != nil {
-		log.Printf("[TRACE] getConnectionPlugin failed: %s", err.Error())
+		log.Printf("[TRACE] Worker PID %d: getConnectionPlugin failed: %s", os.Getpid(), err.Error())
 		return nil, err
 	}
 
@@ -208,20 +208,20 @@ func (h *RemoteHub) startScanForConnection(connectionName string, table string, 
 	}
 
 	if len(qualMap) > 0 {
-		log.Printf("[INFO] connection '%s', table '%s', quals %s", connectionName, table, grpc.QualMapToString(qualMap, true))
+		log.Printf("[INFO] Worker PID %d: connection '%s', table '%s', quals %s", os.Getpid(), connectionName, table, grpc.QualMapToString(qualMap, true))
 	} else {
-		log.Println("[INFO] --------")
-		log.Println("[INFO] no quals")
-		log.Println("[INFO] --------")
+		log.Printf("[INFO] Worker PID %d: --------", os.Getpid())
+		log.Printf("[INFO] Worker PID %d: no quals", os.Getpid())
+		log.Printf("[INFO] Worker PID %d: --------", os.Getpid())
 	}
 
-	log.Printf("[TRACE] startScanForConnection creating a new scan iterator")
+	log.Printf("[TRACE] Worker PID %d: startScanForConnection creating a new scan iterator", os.Getpid())
 	iterator := newScanIterator(h, connectionPlugin, connectionName, table, connectionLimitMap, qualMap, columns, limit, sortOrder, queryTimestamp, scanTraceCtx)
 	return iterator, nil
 }
 
 func (h *RemoteHub) buildConnectionLimitMap(table string, qualMap map[string]*proto.Quals, unhandledRestrictions int, connectionNames []string, limit int64, connectionPlugin *steampipeconfig.ConnectionPlugin) (map[string]int64, error) {
-	log.Printf("[INFO] buildConnectionLimitMap, table: '%s', %d %s, limit: %d", table, len(connectionNames), utils.Pluralize("connection", len(connectionNames)), limit)
+	log.Printf("[INFO] Worker PID %d: buildConnectionLimitMap, table: '%s', %d %s, limit: %d", os.Getpid(), table, len(connectionNames), utils.Pluralize("connection", len(connectionNames)), limit)
 
 	connectionSchema, err := connectionPlugin.GetSchema(connectionNames[0])
 	if err != nil {
@@ -233,7 +233,7 @@ func (h *RemoteHub) buildConnectionLimitMap(table string, qualMap map[string]*pr
 	// for a static schema, the limit will be the same for all connections (i.e. we either pushdown for all or none)
 	// check once whether we should push down
 	if limit != -1 && schemaMode == plugin.SchemaModeStatic {
-		log.Printf("[INFO] static schema - using same limit for all connections")
+		log.Printf("[INFO] Worker PID %d: static schema - using same limit for all connections", os.Getpid())
 		if !h.shouldPushdownLimit(table, qualMap, unhandledRestrictions, connectionSchema) {
 			limit = -1
 		}
@@ -245,7 +245,7 @@ func (h *RemoteHub) buildConnectionLimitMap(table string, qualMap map[string]*pr
 		connectionLimit := limit
 		// if schema mode is dynamic, check whether we should push down for each connection
 		if schemaMode == plugin.SchemaModeDynamic && !h.shouldPushdownLimit(table, qualMap, unhandledRestrictions, connectionSchema) {
-			log.Printf("[INFO] not pushing limit down for connection %s", c)
+			log.Printf("[INFO] Worker PID %d: not pushing limit down for connection %s", os.Getpid(), c)
 			connectionLimit = -1
 		}
 		connectionLimitMap[c] = connectionLimit
@@ -258,12 +258,12 @@ func (h *RemoteHub) buildConnectionLimitMap(table string, qualMap map[string]*pr
 // it also makes sure that the plugin is up and running.
 // if the plugin is not running, it attempts to restart the plugin - errors if unable
 func (h *RemoteHub) getConnectionPlugin(connectionName string) (*steampipeconfig.ConnectionPlugin, error) {
-	log.Printf("[TRACE] hub.getConnectionPlugin for connection '%s`", connectionName)
+	log.Printf("[TRACE] Worker PID %d: hub.getConnectionPlugin for connection '%s`", os.Getpid(), connectionName)
 
 	// get the plugin FQN
 	connectionConfig, ok := steampipeconfig.GlobalConfig.Connections[connectionName]
 	if !ok {
-		log.Printf("[WARN] no connection config loaded for connection '%s'", connectionName)
+		log.Printf("[WARN] Worker PID %d: no connection config loaded for connection '%s'", os.Getpid(), connectionName)
 		return nil, fmt.Errorf("no connection config loaded for connection '%s'", connectionName)
 	}
 	pluginFQN := connectionConfig.Plugin
@@ -271,7 +271,7 @@ func (h *RemoteHub) getConnectionPlugin(connectionName string) (*steampipeconfig
 	// ask connection map to get or create this connection
 	c, err := h.connections.getOrCreate(pluginFQN, connectionName)
 	if err != nil {
-		log.Printf("[TRACE] getConnectionPlugin getConnectionPlugin failed: %s", err.Error())
+		log.Printf("[TRACE] Worker PID %d: getConnectionPlugin getConnectionPlugin failed: %s", os.Getpid(), err.Error())
 		return nil, err
 	}
 
@@ -279,33 +279,33 @@ func (h *RemoteHub) getConnectionPlugin(connectionName string) (*steampipeconfig
 }
 
 func (h *RemoteHub) clearConnectionCache(connection string) error {
-	log.Printf("[INFO] clear connection cache for connection '%s'", connection)
+	log.Printf("[INFO] Worker PID %d: clear connection cache for connection '%s'", os.Getpid(), connection)
 	connectionPlugin, err := h.getConnectionPlugin(connection)
 	if err != nil {
-		log.Printf("[WARN] clearConnectionCache failed for connection %s: %s", connection, err)
+		log.Printf("[WARN] Worker PID %d: clearConnectionCache failed for connection %s: %s", os.Getpid(), connection, err)
 		return err
 	}
 
 	_, err = connectionPlugin.PluginClient.SetConnectionCacheOptions(&proto.SetConnectionCacheOptionsRequest{ClearCacheForConnection: connection})
 	if err != nil {
-		log.Printf("[WARN] clearConnectionCache failed for connection %s: SetConnectionCacheOptions returned %s", connection, err)
+		log.Printf("[WARN] Worker PID %d: clearConnectionCache failed for connection %s: SetConnectionCacheOptions returned %s", os.Getpid(), connection, err)
 	}
-	log.Printf("[INFO] clear connection cache succeeded")
+	log.Printf("[INFO] Worker PID %d: clear connection cache succeeded", os.Getpid())
 	return err
 }
 
 func (h *RemoteHub) cacheEnabled(connectionName string) bool {
 	// if the caching is disabled for the server, just return false
 	if !h.cacheSettings.ServerCacheEnabled {
-		log.Printf("[INFO] cacheEnabled returning false since server cache is disabled")
+		log.Printf("[INFO] Worker PID %d: cacheEnabled returning false since server cache is disabled", os.Getpid())
 		return false
 	}
 
 	if h.cacheSettings.ClientCacheEnabled != nil {
-		log.Printf("[INFO] cacheEnabled returning %v since client cache is enabled", *h.cacheSettings.ClientCacheEnabled)
+		log.Printf("[INFO] Worker PID %d: cacheEnabled returning %v since client cache is enabled", os.Getpid(), *h.cacheSettings.ClientCacheEnabled)
 		return *h.cacheSettings.ClientCacheEnabled
 	}
-	log.Printf("[INFO] default cacheEnabled returning true")
+	log.Printf("[INFO] Worker PID %d: default cacheEnabled returning true", os.Getpid())
 
 	return true
 }
@@ -339,7 +339,7 @@ func (h *RemoteHub) getServerCacheEnabled() bool {
 		res = *steampipeconfig.GlobalConfig.DatabaseOptions.Cache
 	}
 
-	log.Printf("[INFO] Hub.getServerCacheEnabled returning %v", res)
+	log.Printf("[INFO] Worker PID %d: Hub.getServerCacheEnabled returning %v", os.Getpid(), res)
 
 	return res
 }
@@ -349,19 +349,19 @@ func (h *RemoteHub) getServerCacheEnabled() bool {
 func (h *RemoteHub) GetSortableFields(tableName, connectionName string) map[string]proto.SortOrder {
 	connectionPlugin, err := h.getConnectionPlugin(connectionName)
 	if err != nil {
-		log.Printf("[WARN] GetSortableFields getConnectionPlugin failed for connection %s: %s", connectionName, err.Error())
+		log.Printf("[WARN] Worker PID %d: GetSortableFields getConnectionPlugin failed for connection %s: %s", os.Getpid(), connectionName, err.Error())
 		return nil
 	}
 
 	schema, err := connectionPlugin.GetSchema(connectionName)
 	if err != nil {
-		log.Printf("[WARN] GetSortableFields GetSchema failed for connection %s: %s", connectionName, err.Error())
+		log.Printf("[WARN] Worker PID %d: GetSortableFields GetSchema failed for connection %s: %s", os.Getpid(), connectionName, err.Error())
 		return nil
 	}
 
 	tableSchema, ok := schema.Schema[tableName]
 	if !ok {
-		log.Printf("[WARN] GetSortableFields table schema not found for connection %s, table %s", connectionName, tableName)
+		log.Printf("[WARN] Worker PID %d: GetSortableFields table schema not found for connection %s, table %s", os.Getpid(), connectionName, tableName)
 		return nil
 	}
 
@@ -372,7 +372,7 @@ func (h *RemoteHub) GetSortableFields(tableName, connectionName string) map[stri
 	}
 
 	if len(sortableFields) > 0 {
-		log.Printf("[INFO] GetSortableFields for connection '%s`, table `%s`: %v", connectionName, tableName, sortableFields)
+		log.Printf("[INFO] Worker PID %d: GetSortableFields for connection '%s`, table `%s`: %v", os.Getpid(), connectionName, tableName, sortableFields)
 	}
 	return sortableFields
 }
