@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/golang/protobuf/ptypes"
@@ -90,9 +91,9 @@ func (i *scanIteratorBase) Next() (map[string]interface{}, error) {
 		return nil, fmt.Errorf("scanIteratorBase cannot iterate: connection %s, status: %s", i.GetConnectionName(), i.Status())
 	}
 
-	FdwLogMessage(1, fmt.Sprintf("[DEBUG] Next - iterator %p about to block on channel read", i))
+	log.Printf("[DEBUG] Worker PID %d: About to read from rows channel - iterator %p, channel len: %d", os.Getpid(), i, len(i.rows))
 	row := <-i.rows
-	FdwLogMessage(1, fmt.Sprintf("[DEBUG] Next - iterator %p received row: %v", i, row != nil))
+	log.Printf("[DEBUG] Worker PID %d: Read from rows channel completed - iterator %p, got row: %v", os.Getpid(), i, row != nil)
 
 	// if the row channel closed, complete the iterator state
 	var res map[string]interface{}
@@ -297,15 +298,20 @@ func (i *scanIteratorBase) populateRow(row *proto.Row) (map[string]interface{}, 
 // - there stream returns an error
 // there is a signal on the cancel channel
 func (i *scanIteratorBase) readThread(ctx context.Context) {
+	log.Printf("[DEBUG] Worker PID %d: readThread starting - iterator %p", os.Getpid(), i)
 	// if the iterator is not in a started state, skip
 	// (this can happen if postgres cancels the scan before receiving any results)
 	if i.status == QueryStatusStarted {
 		// keep calling readPluginResult until it returns false
 		for i.readPluginResult(ctx) {
 		}
+		log.Printf("[DEBUG] Worker PID %d: readThread finished readPluginResult loop - iterator %p", os.Getpid(), i)
+	} else {
+		log.Printf("[DEBUG] Worker PID %d: readThread skipping - iterator %p status is %s (not STARTED)", os.Getpid(), i, i.status)
 	}
 
 	// now we are done
+	log.Printf("[DEBUG] Worker PID %d: readThread about to close rows channel - iterator %p", os.Getpid(), i)
 	close(i.rows)
 }
 
@@ -321,7 +327,9 @@ func (i *scanIteratorBase) readPluginResult(ctx context.Context) bool {
 				errChan <- helpers.ToError(r)
 			}
 		}()
+		log.Printf("[DEBUG] Worker PID %d: About to call pluginRowStream.Recv() - iterator %p", os.Getpid(), i)
 		rowResult, err := i.pluginRowStream.Recv()
+		log.Printf("[DEBUG] Worker PID %d: pluginRowStream.Recv() returned - iterator %p, result: %v, err: %v", os.Getpid(), i, rowResult != nil, err)
 
 		if err != nil {
 			errChan <- err
@@ -330,6 +338,7 @@ func (i *scanIteratorBase) readPluginResult(ctx context.Context) bool {
 		}
 	}()
 
+	log.Printf("[DEBUG] Worker PID %d: readPluginResult entering select statement - iterator %p", os.Getpid(), i)
 	select {
 	// check for cancellation first - this takes precedence over reading the grpc stream
 	case <-ctx.Done():
