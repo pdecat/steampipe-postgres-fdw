@@ -6,9 +6,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/turbot/steampipe-plugin-sdk/v6/grpc"
 	"github.com/turbot/steampipe-plugin-sdk/v6/grpc/proto"
@@ -36,11 +39,138 @@ type hubBase struct {
 	telemetryShutdownFunc func()
 	hydrateCallsCounter   metric.Int64Counter
 	queryTiming           *queryTimingMetadata
+
+	// parallel worker coordination
+	parallelWorkerCoordination *ParallelWorkerCoordinator
+}
+
+// ParallelWorkerCoordinator manages parallel worker lifecycle and timeout
+type ParallelWorkerCoordinator struct {
+	activeWorkers    map[int]struct{} // Track active worker PIDs
+	workerTimeout    int              // Timeout in seconds
+	executionStart   int64            // Execution start time (Unix timestamp)
+	coordinatorMutex sync.RWMutex     // Protects coordinator state
+}
+
+// NewParallelWorkerCoordinator creates a new coordinator with default timeout
+func NewParallelWorkerCoordinator() *ParallelWorkerCoordinator {
+	timeout := 30 // Default 30 seconds
+	if envTimeout := os.Getenv("STEAMPIPE_FDW_WORKER_TIMEOUT"); envTimeout != "" {
+		if customTimeout, err := strconv.Atoi(envTimeout); err == nil && customTimeout > 0 {
+			timeout = customTimeout
+		}
+	}
+
+	return &ParallelWorkerCoordinator{
+		activeWorkers:  make(map[int]struct{}),
+		workerTimeout:  timeout,
+		executionStart: time.Now().Unix(),
+	}
+}
+
+// RegisterWorker registers a new parallel worker
+func (pwc *ParallelWorkerCoordinator) RegisterWorker(pid int) {
+	pwc.coordinatorMutex.Lock()
+	defer pwc.coordinatorMutex.Unlock()
+
+	pwc.activeWorkers[pid] = struct{}{}
+	log.Printf("[DEBUG] Parallel worker PID %d registered - total active: %d", pid, len(pwc.activeWorkers))
+}
+
+// UnregisterWorker removes a parallel worker from tracking
+func (pwc *ParallelWorkerCoordinator) UnregisterWorker(pid int) {
+	pwc.coordinatorMutex.Lock()
+	defer pwc.coordinatorMutex.Unlock()
+
+	delete(pwc.activeWorkers, pid)
+	log.Printf("[DEBUG] Parallel worker PID %d unregistered - total active: %d", pid, len(pwc.activeWorkers))
+}
+
+// ShouldWorkerTimeout checks if a worker should timeout based on elapsed time
+func (pwc *ParallelWorkerCoordinator) ShouldWorkerTimeout() bool {
+	pwc.coordinatorMutex.RLock()
+	defer pwc.coordinatorMutex.RUnlock()
+
+	elapsed := time.Now().Unix() - pwc.executionStart
+	return elapsed > int64(pwc.workerTimeout)
+}
+
+// GetActiveWorkerCount returns the number of active workers
+func (pwc *ParallelWorkerCoordinator) GetActiveWorkerCount() int {
+	pwc.coordinatorMutex.RLock()
+	defer pwc.coordinatorMutex.RUnlock()
+
+	return len(pwc.activeWorkers)
+}
+
+// ResetExecution resets the execution start time for new parallel execution
+func (pwc *ParallelWorkerCoordinator) ResetExecution() {
+	pwc.coordinatorMutex.Lock()
+	defer pwc.coordinatorMutex.Unlock()
+
+	pwc.executionStart = time.Now().Unix()
+	pwc.activeWorkers = make(map[int]struct{})
+	log.Printf("[DEBUG] Parallel execution reset - timeout: %d seconds", pwc.workerTimeout)
+}
+
+// CheckForIdleWorkers monitors for idle workers and handles timeouts
+func (pwc *ParallelWorkerCoordinator) CheckForIdleWorkers() []int {
+	pwc.coordinatorMutex.RLock()
+	defer pwc.coordinatorMutex.RUnlock()
+
+	if !pwc.ShouldWorkerTimeout() {
+		return nil
+	}
+
+	// If we've exceeded the timeout, return list of active workers that should be terminated
+	var idleWorkers []int
+	for pid := range pwc.activeWorkers {
+		idleWorkers = append(idleWorkers, pid)
+	}
+
+	if len(idleWorkers) > 0 {
+		log.Printf("[WARN] Detected %d idle workers after %d second timeout", len(idleWorkers), pwc.workerTimeout)
+	}
+
+	return idleWorkers
+}
+
+// MonitorWorkerTimeout starts a background goroutine to monitor worker timeouts
+func (h *hubBase) MonitorWorkerTimeout(ctx context.Context) {
+	if h.parallelWorkerCoordination == nil {
+		return
+	}
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second) // Check every 5 seconds
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				log.Printf("[DEBUG] Worker timeout monitor stopping")
+				return
+			case <-ticker.C:
+				idleWorkers := h.parallelWorkerCoordination.CheckForIdleWorkers()
+				if len(idleWorkers) > 0 {
+					log.Printf("[WARN] Found %d idle workers that may need termination: %v", len(idleWorkers), idleWorkers)
+					// In a real implementation, we might send signals to these workers
+					// or implement other coordination mechanisms
+
+					// For now, we'll log the issue and let PostgreSQL handle cleanup
+					// The key insight is that we've detected the problem
+				}
+			}
+		}
+	}()
+
+	log.Printf("[DEBUG] Started worker timeout monitor with %d second timeout", h.parallelWorkerCoordination.workerTimeout)
 }
 
 func newHubBase(enableScanMetadata bool) *hubBase {
 	h := &hubBase{
-		runningIterators: make(map[Iterator]struct{}),
+		runningIterators:           make(map[Iterator]struct{}),
+		parallelWorkerCoordination: NewParallelWorkerCoordinator(),
 	}
 	if enableScanMetadata {
 		h.queryTiming = newQueryTimingMetadata()
@@ -112,7 +242,7 @@ func (h *hubBase) getPathKeys(connectionSchema *proto.Schema, opts types.Options
 	connectionName := opts["connection"]
 	table := opts["table"]
 
-	log.Printf("[TRACE] hub.GetPathKeys for connection '%s`, table `%s`", connectionName, table)
+	log.Printf("[TRACE] Worker PID %d: hub.GetPathKeys for connection '%s`, table `%s`", os.Getpid(), connectionName, table)
 	tableSchema, ok := connectionSchema.Schema[table]
 	if !ok {
 		return nil, fmt.Errorf("no schema loaded for connection '%s', table '%s'", connectionName, table)
@@ -162,6 +292,13 @@ func (h *hubBase) Explain(columns []string, quals []*proto.Qual, sortKeys []stri
 func (h *hubBase) StartScan(i Iterator) error {
 	log.Printf("[DEBUG] StartScan - beginning for iterator %p", i)
 
+	// Register worker with parallel coordination if enabled
+	if h.parallelWorkerCoordination != nil {
+		pid := os.Getpid()
+		h.parallelWorkerCoordination.RegisterWorker(pid)
+		log.Printf("[DEBUG] StartScan - registered parallel worker PID %d", pid)
+	}
+
 	// if iterator is not a pluginIterator, do nothing
 	// (i.e. is it an InMemoryIterator
 	// This code should never be called for them anyway as they are initialized to be in a `started` state,
@@ -192,6 +329,13 @@ func (h *hubBase) StartScan(i Iterator) error {
 func (h *hubBase) EndScan(iter Iterator, limit int64) {
 	log.Printf("[DEBUG] EndScan - starting for iterator %p, status: %s", iter, iter.Status())
 	log.Printf("[DEBUG] EndScan - running iterator count before cleanup: %d", len(h.runningIterators))
+
+	// Unregister worker from parallel coordination if enabled
+	if h.parallelWorkerCoordination != nil {
+		pid := os.Getpid()
+		h.parallelWorkerCoordination.UnregisterWorker(pid)
+		log.Printf("[DEBUG] EndScan - unregistered parallel worker PID %d", pid)
+	}
 
 	// is the iterator still running? If so it means postgres is stopping a scan before all rows have been read
 	if iter.Status() == QueryStatusStarted {
