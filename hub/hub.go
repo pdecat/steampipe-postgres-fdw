@@ -31,4 +31,7 @@ type Hub interface {
 	cacheTTL(name string) time.Duration
 	cacheEnabled(name string) bool
 	GetSortableFields(table, connection string) map[string]proto.SortOrder
+	// Parallel worker coordination methods
+	RegisterParallelWorker(pid int)
+	UnregisterParallelWorker(pid int)
 }

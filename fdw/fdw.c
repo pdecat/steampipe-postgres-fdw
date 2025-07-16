@@ -190,22 +190,27 @@ static void fdwReInitializeDSMForeignScan(ForeignScanState *node, ParallelContex
 
 static void fdwInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc, void *coordinate) {
 	FdwParallelCoordinate *coord = (FdwParallelCoordinate *) coordinate;
-
+	
 	elog(LOG, "[DEBUG] Worker PID %d: fdwInitializeWorkerForeignScan() called", getpid());
-
+	
 	if (coord != NULL) {
 		// Register this worker as active
 		uint32 active_count = pg_atomic_fetch_add_u32(&coord->active_workers, 1) + 1;
 		uint32 total_workers = pg_atomic_read_u32(&coord->total_workers);
-
+		
 		elog(LOG, "[DEBUG] Worker PID %d: Parallel worker initialized - active: %u/%u",
 			 getpid(), active_count, total_workers);
-
-		// Start a background process to monitor for timeout/completion
-		// This is crucial for idle workers that don't get assigned any work
-		elog(LOG, "[DEBUG] Worker PID %d: Worker ready for parallel execution with timeout monitoring", getpid());
+		
+		// This is the critical point - ALL parallel workers reach this callback
+		// regardless of whether they get assigned work or not
+		// Call Go function to register this worker properly
+		goFdwRegisterParallelWorker(getpid());
+		
+		elog(LOG, "[DEBUG] Worker PID %d: Worker registered and ready for parallel execution with timeout monitoring", getpid());
 	} else {
 		elog(LOG, "[DEBUG] Worker PID %d: No coordination structure available - worker initialized without timeout", getpid());
+		// Even without coordination structure, register the worker for timeout monitoring
+		goFdwRegisterParallelWorker(getpid());
 	}
 }
 
