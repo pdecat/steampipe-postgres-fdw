@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"log"
+	"os"
 
 	"github.com/turbot/steampipe/v2/pkg/query/queryresult"
 
@@ -51,7 +52,7 @@ func (i *inMemoryIterator) Next() (map[string]interface{}, error) {
 		i.index++
 		return i.rows[idx], nil
 	}
-	log.Printf("[TRACE] inMemoryIterator Next() complete (%p)", i)
+	log.Printf("[TRACE] Worker PID %d: inMemoryIterator Next() complete (%p)", os.Getpid(), i)
 	i.status = QueryStatusComplete
 	return nil, nil
 }
@@ -59,7 +60,7 @@ func (i *inMemoryIterator) Next() (map[string]interface{}, error) {
 // Close implements Iterator
 // clear the rows and the index
 func (i *inMemoryIterator) Close() {
-	log.Printf("[TRACE] inMemoryIterator Close() (%p)", i)
+	log.Printf("[TRACE] Worker PID %d: inMemoryIterator Close() (%p)", os.Getpid(), i)
 	i.index = 0
 	i.rows = nil
 	i.status = QueryStatusReady
