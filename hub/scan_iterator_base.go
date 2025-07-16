@@ -77,17 +77,17 @@ func (i *scanIteratorBase) Error() error {
 // Next implements Iterator
 // return the next row. Nil row means there are no more rows to scan.
 func (i *scanIteratorBase) Next() (map[string]interface{}, error) {
-	log.Printf("[DEBUG] Next - iterator %p, connection: %s, status: %s", i, i.GetConnectionName(), i.Status())
+	log.Printf("[DEBUG] Worker PID %d: Next - iterator %p, connection: %s, status: %s", os.Getpid(), i, i.GetConnectionName(), i.Status())
 
 	// check the iterator state - has an error occurred
 	if i.status == QueryStatusError {
-		log.Printf("[ERROR] Next - iterator %p in error state: %v", i, i.err)
+		log.Printf("[ERROR] Worker PID %d: Next - iterator %p in error state: %v", os.Getpid(), i, i.err)
 		return nil, i.err
 	}
 
 	if !i.CanIterate() {
 		// this is a bug
-		log.Printf("[WARN] scanIteratorBase cannot iterate: connection %s, status: %s", i.GetConnectionName(), i.Status())
+		log.Printf("[WARN] Worker PID %d: scanIteratorBase cannot iterate: connection %s, status: %s", os.Getpid(), i.GetConnectionName(), i.Status())
 		return nil, fmt.Errorf("scanIteratorBase cannot iterate: connection %s, status: %s", i.GetConnectionName(), i.Status())
 	}
 
@@ -98,7 +98,7 @@ func (i *scanIteratorBase) Next() (map[string]interface{}, error) {
 	// if the row channel closed, complete the iterator state
 	var res map[string]interface{}
 	if row == nil {
-		log.Printf("[DEBUG] Next - iterator %p received nil row, closing", i)
+		log.Printf("[DEBUG] Worker PID %d: Next - iterator %p received nil row, closing", os.Getpid(), i)
 		// close the span and set the status
 		i.Close()
 		// remove from hub running iterators
@@ -106,21 +106,21 @@ func (i *scanIteratorBase) Next() (map[string]interface{}, error) {
 
 		// if iterator is in error, return the error
 		if i.Status() == QueryStatusError {
-			log.Printf("[ERROR] Next - iterator %p completed with error: %v", i, i.err)
+			log.Printf("[ERROR] Worker PID %d: Next - iterator %p completed with error: %v", os.Getpid(), i, i.err)
 			// return error
 			return nil, i.err
 		}
-		log.Printf("[INFO] Next - iterator %p completed successfully", i)
+		log.Printf("[INFO] Worker PID %d: Next - iterator %p completed successfully", os.Getpid(), i)
 		// otherwise mark iterator complete, caching result
 	} else {
 		// so we got a row
 		var err error
 		res, err = i.populateRow(row)
 		if err != nil {
-			log.Printf("[ERROR] Next - iterator %p failed to populate row: %v", i, err)
+			log.Printf("[ERROR] Worker PID %d: Next - iterator %p failed to populate row: %v", os.Getpid(), i, err)
 			return nil, err
 		}
-		log.Printf("[DEBUG] Next - iterator %p populated row successfully", i)
+		log.Printf("[DEBUG] Worker PID %d: Next - iterator %p populated row successfully", os.Getpid(), i)
 	}
 	return res, nil
 }
@@ -130,28 +130,28 @@ func (i *scanIteratorBase) closeSpan() {
 }
 
 func (i *scanIteratorBase) Close() {
-	log.Printf("[DEBUG] Close - iterator %p, connection: %s, current status: %s", i, i.GetConnectionName(), i.Status())
+	log.Printf("[DEBUG] Worker PID %d: Close - iterator %p, connection: %s, current status: %s", os.Getpid(), i, i.GetConnectionName(), i.Status())
 
 	// call the context cancellation function
 	if i.cancel != nil {
-		log.Printf("[DEBUG] Close - cancelling context for iterator %p", i)
+		log.Printf("[DEBUG] Worker PID %d: Close - cancelling context for iterator %p", os.Getpid(), i)
 		i.cancel()
-		log.Printf("[DEBUG] Close - cancelled context for iterator %p", i)
+		log.Printf("[DEBUG] Worker PID %d: Close - cancelled context for iterator %p", os.Getpid(), i)
 	} else {
-		log.Printf("[WARN] Close - no cancel function for iterator %p", i)
+		log.Printf("[WARN] Worker PID %d: Close - no cancel function for iterator %p", os.Getpid(), i)
 	}
 
 	// set status to complete
 	if i.status != QueryStatusError {
-		log.Printf("[DEBUG] Close - setting status to complete for iterator %p", i)
+		log.Printf("[DEBUG] Worker PID %d: Close - setting status to complete for iterator %p", os.Getpid(), i)
 		i.status = QueryStatusComplete
 	} else {
-		log.Printf("[DEBUG] Close - iterator %p already in error state", i)
+		log.Printf("[DEBUG] Worker PID %d: Close - iterator %p already in error state", os.Getpid(), i)
 	}
 
-	log.Printf("[DEBUG] Close - closing span for iterator %p", i)
+	log.Printf("[DEBUG] Worker PID %d: Close - closing span for iterator %p", os.Getpid(), i)
 	i.closeSpan()
-	log.Printf("[INFO] Close - completed for iterator %p", i)
+	log.Printf("[INFO] Worker PID %d: Close - completed for iterator %p", os.Getpid(), i)
 }
 
 // CanIterate returns true if this iterator has results available to iterate
@@ -225,15 +225,16 @@ func (i *scanIteratorBase) GetScanMetadata() []queryresult.ScanMetadataRow {
 
 func (i *scanIteratorBase) newExecuteRequest() *proto.ExecuteRequest {
 	traceCarrier := grpc.CreateCarrierFromContext(i.traceCtx.Ctx)
-	log.Printf("[DEBUG] newExecuteRequest creating trace carrier for table %s: %v", i.table, traceCarrier)
+	log.Printf("[DEBUG] Worker PID %d: newExecuteRequest creating trace carrier for table %s: %v", os.Getpid(), i.table, traceCarrier)
 
 	// Validate span context from the trace context
 	spanCtx := trace.SpanContextFromContext(i.traceCtx.Ctx)
 	if spanCtx.IsValid() {
-		log.Printf("[DEBUG] newExecuteRequest has valid span context - TraceID: %s, SpanID: %s",
+		log.Printf("[DEBUG] Worker PID %d: newExecuteRequest has valid span context - TraceID: %s, SpanID: %s",
+		os.Getpid(),
 			spanCtx.TraceID().String(), spanCtx.SpanID().String())
 	} else {
-		log.Printf("[WARN] newExecuteRequest has invalid span context for table %s", i.table)
+		log.Printf("[WARN] Worker PID %d: newExecuteRequest has invalid span context for table %s", os.Getpid(), i.table)
 	}
 
 	req := &proto.ExecuteRequest{
@@ -246,7 +247,7 @@ func (i *scanIteratorBase) newExecuteRequest() *proto.ExecuteRequest {
 		ExecuteConnectionData: make(map[string]*proto.ExecuteConnectionData),
 	}
 
-	log.Printf("[INFO] build executeConnectionData map: hub: %p, i.connectionLimitMap: %v", i.hub, i.connectionLimitMap)
+	log.Printf("[INFO] Worker PID %d: build executeConnectionData map: hub: %p, i.connectionLimitMap: %v", os.Getpid(), i.hub, i.connectionLimitMap)
 	// build executeConnectionData map
 	for connectionName, limit := range i.connectionLimitMap {
 		data := &proto.ExecuteConnectionData{}
@@ -258,7 +259,7 @@ func (i *scanIteratorBase) newExecuteRequest() *proto.ExecuteRequest {
 		req.ExecuteConnectionData[connectionName] = data
 
 	}
-	log.Printf("[INFO] build executeConnectionData map returning %v", req)
+	log.Printf("[INFO] Worker PID %d: build executeConnectionData map returning %v", os.Getpid(), req)
 
 	return req
 }
@@ -342,11 +343,11 @@ func (i *scanIteratorBase) readPluginResult(ctx context.Context) bool {
 	select {
 	// check for cancellation first - this takes precedence over reading the grpc stream
 	case <-ctx.Done():
-		log.Printf("[TRACE] readPluginResult context is cancelled (%p)", i)
+		log.Printf("[TRACE] Worker PID %d: readPluginResult context is cancelled (%p)", os.Getpid(), i)
 		continueReading = false
 	case rowResult := <-rcvChan:
 		if rowResult == nil {
-			log.Printf("[TRACE] readPluginResult nil row received - stop reading (%p) (%s)", i, i.callId)
+			log.Printf("[TRACE] Worker PID %d: readPluginResult nil row received - stop reading (%p) (%s)", os.Getpid(), i, i.callId)
 			// stop reading
 			continueReading = false
 		} else {
@@ -358,9 +359,9 @@ func (i *scanIteratorBase) readPluginResult(ctx context.Context) bool {
 		}
 	case err := <-errChan:
 		if err.Error() == "EOF" {
-			log.Printf("[TRACE] readPluginResult EOF error received - stop reading (%p) (%s)", i, i.callId)
+			log.Printf("[TRACE] Worker PID %d: readPluginResult EOF error received - stop reading (%p) (%s)", os.Getpid(), i, i.callId)
 		} else {
-			log.Printf("[WARN] stream receive error %v (%p)\n", err, i)
+			log.Printf("[WARN] Worker PID %d: stream receive error %v (%p)\n", os.Getpid(), err, i)
 			i.setError(err)
 		}
 		// stop reading

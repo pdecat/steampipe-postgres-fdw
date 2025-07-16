@@ -9,6 +9,7 @@ import "C"
 
 import (
 	"log"
+	"os"
 	"slices"
 	"unsafe"
 
@@ -36,28 +37,28 @@ func SchemaToSql(schema map[string]*proto.TableSchema, stmt *C.ImportForeignSche
 			tables = append(tables, t)
 		}
 	}
-	log.Printf("[TRACE] SchemaToSql: tables %v\n", tables)
+	log.Printf("[TRACE] Worker PID %d: SchemaToSql: tables %v\n", os.Getpid(), tables)
 
 	// TODO we do not handle any options currently
 
 	for table, tableSchema := range schema {
 		if stmt.list_type == C.FDW_IMPORT_SCHEMA_LIMIT_TO {
-			log.Printf("[TRACE] list_type is FDW_IMPORT_SCHEMA_LIMIT_TO: %v", tables)
+			log.Printf("[TRACE] Worker PID %d: list_type is FDW_IMPORT_SCHEMA_LIMIT_TO: %v", os.Getpid(), tables)
 
 			if !slices.Contains(tables, table) {
-				log.Printf("[TRACE] Skipping table %s", table)
+				log.Printf("[TRACE] Worker PID %d: Skipping table %s", os.Getpid(), table)
 
 				continue
 			}
 		} else if stmt.list_type == C.FDW_IMPORT_SCHEMA_EXCEPT {
-			log.Printf("[TRACE] list_type is FDW_IMPORT_SCHEMA_EXCEPT: %v", tables)
+			log.Printf("[TRACE] Worker PID %d: list_type is FDW_IMPORT_SCHEMA_EXCEPT: %v", os.Getpid(), tables)
 
 			if slices.Contains(tables, table) {
-				log.Printf("[TRACE] Skipping table %s", table)
+				log.Printf("[TRACE] Worker PID %d: Skipping table %s", os.Getpid(), table)
 				continue
 			}
 		}
-		log.Printf("[TRACE] Import table %s", table)
+		log.Printf("[TRACE] Worker PID %d: Import table %s", os.Getpid(), table)
 
 		sql, err := sql.GetSQLForTable(table, tableSchema, localSchema, serverName)
 		if err != nil {
@@ -65,7 +66,7 @@ func SchemaToSql(schema map[string]*proto.TableSchema, stmt *C.ImportForeignSche
 			return nil
 		}
 
-		log.Printf("[TRACE] SQL %s", sql)
+		log.Printf("[TRACE] Worker PID %d: SQL %s", os.Getpid(), sql)
 		commands = C.lappend(commands, unsafe.Pointer(C.CString(sql)))
 	}
 

@@ -210,7 +210,7 @@ func jsonValueString(val interface{}) (string, error) {
 
 	// remove unicode null char "\u0000", UNLESS escaped, i.e."\\u0000"
 	if strings.Contains(valueString, `\u0000`) {
-		log.Printf("[TRACE] null unicode character detected in JSON value - removing if not escaped")
+		log.Printf("[TRACE] Worker PID %d: null unicode character detected in JSON value - removing if not escaped", os.Getpid())
 		re := regexp.MustCompile(`((?:^|[^\\])(?:\\\\)*)(?:\\u0000)+`)
 		valueString = re.ReplaceAllString(valueString, "$1")
 	}
