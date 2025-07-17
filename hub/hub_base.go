@@ -187,6 +187,11 @@ func (h *hubBase) UnregisterParallelWorker(pid int) {
 	}
 }
 
+// GetParallelWorkerCoordinator implements the Hub interface
+func (h *hubBase) GetParallelWorkerCoordinator() *ParallelWorkerCoordinator {
+	return h.parallelWorkerCoordination
+}
+
 func newHubBase(enableScanMetadata bool) *hubBase {
 	h := &hubBase{
 		runningIterators:           make(map[Iterator]struct{}),
