@@ -74,11 +74,14 @@ void _PG_init(void)
         exit(EXIT_FAILURE);
     }
 
+    /* register an exit hook */
+    on_proc_exit(&exitHook, PointerGetDatum(NULL));
+    RegisterXactCallback(pgfdw_xact_callback, NULL);
 
-  /* register an exit hook */
-  on_proc_exit(&exitHook, PointerGetDatum(NULL));
-  RegisterXactCallback(pgfdw_xact_callback, NULL);
-
+    // Register this worker immediately when the FDW extension loads
+    // This catches ALL workers, including idle parallel workers
+    elog(LOG, "[DEBUG] Worker PID %d: Registering worker for parallel coordination in _PG_init", getpid());
+    goFdwRegisterParallelWorker(getpid());
 }
 
 /*
@@ -190,22 +193,22 @@ static void fdwReInitializeDSMForeignScan(ForeignScanState *node, ParallelContex
 
 static void fdwInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc, void *coordinate) {
 	FdwParallelCoordinate *coord = (FdwParallelCoordinate *) coordinate;
-	
+
 	elog(LOG, "[DEBUG] Worker PID %d: fdwInitializeWorkerForeignScan() called", getpid());
-	
+
 	if (coord != NULL) {
 		// Register this worker as active
 		uint32 active_count = pg_atomic_fetch_add_u32(&coord->active_workers, 1) + 1;
 		uint32 total_workers = pg_atomic_read_u32(&coord->total_workers);
-		
+
 		elog(LOG, "[DEBUG] Worker PID %d: Parallel worker initialized - active: %u/%u",
 			 getpid(), active_count, total_workers);
-		
+
 		// This is the critical point - ALL parallel workers reach this callback
 		// regardless of whether they get assigned work or not
 		// Call Go function to register this worker properly
 		goFdwRegisterParallelWorker(getpid());
-		
+
 		elog(LOG, "[DEBUG] Worker PID %d: Worker registered and ready for parallel execution with timeout monitoring", getpid());
 	} else {
 		elog(LOG, "[DEBUG] Worker PID %d: No coordination structure available - worker initialized without timeout", getpid());
