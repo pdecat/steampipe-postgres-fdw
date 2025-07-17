@@ -85,6 +85,13 @@ func (pwc *ParallelWorkerCoordinator) UnregisterWorker(pid int) {
 
 	delete(pwc.activeWorkers, pid)
 	log.Printf("[DEBUG] Worker PID %d unregistered - total active: %d", pid, len(pwc.activeWorkers))
+
+	// If this was the last worker, reset the coordinator state to allow cleanup
+	if len(pwc.activeWorkers) == 0 {
+		log.Printf("[DEBUG] Worker PID %d: All workers unregistered - resetting coordinator state", os.Getpid())
+		pwc.coordinatorRunning = false
+		pwc.executionStart = time.Now().Unix() // Reset execution start time
+	}
 }
 
 // ShouldWorkerTimeout checks if a worker should timeout based on elapsed time
@@ -127,21 +134,46 @@ func (pwc *ParallelWorkerCoordinator) StartGlobalCoordinator() {
 
 	log.Printf("[INFO] Worker PID %d: Starting global parallel worker coordinator", os.Getpid())
 
-	// Start background coordinator goroutine
+	// Start background coordinator goroutine with resource-efficient monitoring
 	go func() {
+		defer func() {
+			// Ensure coordinator is marked as stopped when goroutine exits
+			pwc.coordinatorMutex.Lock()
+			pwc.coordinatorRunning = false
+			pwc.coordinatorMutex.Unlock()
+			log.Printf("[INFO] Worker PID %d: Global Coordinator: Coordinator goroutine exiting", os.Getpid())
+		}()
+
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
+
+		maxIterations := 60 // Maximum 5 minutes of monitoring (60 * 5 seconds)
+		iterations := 0
 
 		for {
 			select {
 			case <-ticker.C:
+				iterations++
+
 				pwc.coordinatorMutex.RLock()
 				activeCount := len(pwc.activeWorkers)
 				shouldTimeout := pwc.ShouldWorkerTimeout()
 				pwc.coordinatorMutex.RUnlock()
 
+				// Exit if no workers are active for several iterations
+				if activeCount == 0 {
+					log.Printf("[INFO] Worker PID %d: Global Coordinator: No active workers, exiting coordinator", os.Getpid())
+					return
+				}
+
+				// Exit after maximum monitoring time to prevent resource leaks
+				if iterations >= maxIterations {
+					log.Printf("[INFO] Worker PID %d: Global Coordinator: Maximum monitoring time reached, exiting coordinator", os.Getpid())
+					return
+				}
+
 				if shouldTimeout && activeCount > 0 {
-					log.Printf("[INFO] Global Coordinator: Timeout detected with %d active workers", activeCount)
+					log.Printf("[INFO] Worker PID %d: Global Coordinator: Timeout detected with %d active workers", os.Getpid(), activeCount)
 
 					// Get list of active worker PIDs
 					pwc.coordinatorMutex.RLock()
@@ -153,7 +185,7 @@ func (pwc *ParallelWorkerCoordinator) StartGlobalCoordinator() {
 
 					// Mark all workers as timed out
 					for _, pid := range workerPids {
-						log.Printf("[INFO] Global Coordinator: Marking worker PID %d as timed out", pid)
+						log.Printf("[INFO] Worker PID %d: Global Coordinator: Marking worker PID %d as timed out", os.Getpid(), pid)
 						pwc.MarkWorkerTimedOut(pid)
 					}
 
