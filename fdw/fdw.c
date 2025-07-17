@@ -77,11 +77,6 @@ void _PG_init(void)
     /* register an exit hook */
     on_proc_exit(&exitHook, PointerGetDatum(NULL));
     RegisterXactCallback(pgfdw_xact_callback, NULL);
-
-    // Register this worker immediately when the FDW extension loads
-    // This catches ALL workers, including idle parallel workers
-    elog(LOG, "[DEBUG] Worker PID %d: Registering worker for parallel coordination in _PG_init", getpid());
-    goFdwRegisterParallelWorker(getpid());
 }
 
 /*
@@ -104,6 +99,12 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 
 void exitHook(int code, Datum arg)
 {
+  elog(LOG, "[DEBUG] Worker PID %d: exitHook called with code %d - cleaning up worker resources", getpid(), code);
+
+  // Call Go cleanup function to ensure proper resource cleanup
+  goFdwWorkerCleanup();
+
+  // Call existing shutdown function
   goFdwShutdown();
 }
 
