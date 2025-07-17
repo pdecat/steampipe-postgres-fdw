@@ -56,13 +56,6 @@ func goFdwRegisterParallelWorker(pid C.int) {
 		// Use the interface method to register the worker
 		currentHub.RegisterParallelWorker(workerPid)
 		log.Printf("[DEBUG] Worker PID %d: Successfully registered with parallel worker coordinator", workerPid)
-
-		// Start a global coordinator if this is the first worker to register
-		// This coordinator will monitor ALL workers, including idle ones
-		coordinator := currentHub.GetParallelWorkerCoordinator()
-		if coordinator != nil {
-			coordinator.StartGlobalCoordinator()
-		}
 	} else {
 		log.Printf("[WARN] Worker PID %d: No hub instance available for worker registration", workerPid)
 	}
@@ -651,9 +644,33 @@ func goFdwAbortCallback() {
 		}
 	}()
 	log.Printf("[INFO] Worker PID %d: goFdwAbortCallback", os.Getpid())
-	pluginHub := hub.GetHub()
-	pluginHub.Abort()
 
+	// Clean up worker registration before aborting
+	pluginHub := hub.GetHub()
+	if pluginHub != nil {
+		pluginHub.UnregisterParallelWorker(os.Getpid())
+		log.Printf("[DEBUG] Worker PID %d: Unregistered from parallel worker coordination in AbortCallback", os.Getpid())
+		pluginHub.Abort()
+	}
+}
+
+// Worker cleanup function called from C exit hook
+//export goFdwWorkerCleanup
+func goFdwWorkerCleanup() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[WARN] Worker PID %d: goFdwWorkerCleanup failed with panic: %v", os.Getpid(), r)
+		}
+	}()
+
+	log.Printf("[DEBUG] Worker PID %d: goFdwWorkerCleanup() called - cleaning up worker resources", os.Getpid())
+
+	// Ensure worker is unregistered from parallel coordination
+	pluginHub := hub.GetHub()
+	if pluginHub != nil {
+		pluginHub.UnregisterParallelWorker(os.Getpid())
+		log.Printf("[DEBUG] Worker PID %d: Unregistered from parallel worker coordination in WorkerCleanup", os.Getpid())
+	}
 }
 
 //export goFdwImportForeignSchema
