@@ -48,7 +48,7 @@ func goInit() {}
 func goFdwRegisterParallelWorker(pid C.int) {
 	workerPid := int(pid)
 	log.Printf("[DEBUG] Worker PID %d: goFdwRegisterParallelWorker() called - registering for timeout monitoring", workerPid)
-	
+
 	// Get the current hub instance and register the worker
 	currentHub := hub.GetHub()
 	if currentHub != nil {
@@ -331,6 +331,41 @@ func goFdwBeginForeignScan(node *C.ForeignScanState, eflags C.int) {
 	explain := eflags&C.EXEC_FLAG_EXPLAIN_ONLY == C.EXEC_FLAG_EXPLAIN_ONLY
 
 	log.Printf("[DEBUG] Worker PID %d: goFdwBeginForeignScan() called", os.Getpid())
+
+	// Register this worker for parallel coordination and timeout monitoring
+	// This ensures all workers (including idle ones) are tracked
+	currentHub := hub.GetHub()
+	if currentHub != nil {
+		currentHub.RegisterParallelWorker(os.Getpid())
+		log.Printf("[DEBUG] Worker PID %d: Registered for parallel worker coordination in BeginForeignScan", os.Getpid())
+
+		// Start a background timeout monitor for this worker
+		// This is critical for idle workers that never call IterateForeignScan
+		go func() {
+			workerPid := os.Getpid()
+			coordinator := currentHub.GetParallelWorkerCoordinator()
+			if coordinator == nil {
+				log.Printf("[DEBUG] Worker PID %d: No coordinator available for timeout monitoring", workerPid)
+				return
+			}
+
+			// Check timeout every 5 seconds
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ticker.C:
+					if coordinator.ShouldWorkerTimeout() {
+						log.Printf("[INFO] Worker PID %d: Background timeout detected - idle worker should exit", workerPid)
+						// Signal the PostgreSQL process to terminate gracefully
+						// This is a last resort for workers that never iterate
+						os.Exit(0)
+					}
+				}
+			}
+		}()
+	}
 	logging.LogTime("[fdw] BeginForeignScan start")
 	rel := BuildRelation(node.ss.ss_currentRelation)
 	opts := GetFTableOptions(rel.ID)
@@ -444,6 +479,19 @@ func goFdwIterateForeignScan(node *C.ForeignScanState) *C.TupleTableSlot {
 		}
 	}()
 	log.Printf("[DEBUG] Worker PID %d: goFdwIterateForeignScan() called", os.Getpid())
+
+	// Check if this worker should timeout (for idle worker detection)
+	currentHub := hub.GetHub()
+	if currentHub != nil {
+		if coordinator := currentHub.GetParallelWorkerCoordinator(); coordinator != nil {
+			if coordinator.ShouldWorkerTimeout() {
+				log.Printf("[INFO] Worker PID %d: Worker timeout detected in IterateForeignScan - terminating idle worker", os.Getpid())
+				// Return empty result to signal completion and allow worker to exit
+				return nil
+			}
+		}
+	}
+
 	logging.LogTime("[fdw] IterateForeignScan start")
 
 	s := GetExecState(node.fdw_state)
@@ -534,8 +582,17 @@ func goFdwEndForeignScan(node *C.ForeignScanState) {
 			FdwError(fmt.Errorf("%v", r))
 		}
 	}()
-	s := GetExecState(node.fdw_state)
+
+	log.Printf("[DEBUG] Worker PID %d: goFdwEndForeignScan() called", os.Getpid())
+
+	// Unregister this worker from parallel coordination
 	pluginHub := hub.GetHub()
+	if pluginHub != nil {
+		pluginHub.UnregisterParallelWorker(os.Getpid())
+		log.Printf("[DEBUG] Worker PID %d: Unregistered from parallel worker coordination in EndForeignScan", os.Getpid())
+	}
+
+	s := GetExecState(node.fdw_state)
 	if s != nil {
 		log.Printf("[INFO] Worker PID %d: goFdwEndForeignScan, iterator: %p", os.Getpid(), s.Iter)
 		pluginHub.EndScan(s.Iter, int64(s.State.limit))
