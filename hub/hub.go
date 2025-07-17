@@ -34,4 +34,5 @@ type Hub interface {
 	// Parallel worker coordination methods
 	RegisterParallelWorker(pid int)
 	UnregisterParallelWorker(pid int)
+	GetParallelWorkerCoordinator() *ParallelWorkerCoordinator
 }
