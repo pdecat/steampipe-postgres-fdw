@@ -95,6 +95,16 @@ func (pwc *ParallelWorkerCoordinator) ShouldWorkerTimeout() bool {
 	return elapsed > int64(pwc.workerTimeout)
 }
 
+// MarkWorkerTimedOut marks a worker as timed out for graceful termination
+func (pwc *ParallelWorkerCoordinator) MarkWorkerTimedOut(pid int) {
+	pwc.coordinatorMutex.Lock()
+	defer pwc.coordinatorMutex.Unlock()
+
+	// Remove from active workers since it's timing out
+	delete(pwc.activeWorkers, pid)
+	log.Printf("[DEBUG] Worker PID %d marked as timed out - removed from active workers, total active: %d", pid, len(pwc.activeWorkers))
+}
+
 // GetActiveWorkerCount returns the number of active workers
 func (pwc *ParallelWorkerCoordinator) GetActiveWorkerCount() int {
 	pwc.coordinatorMutex.RLock()
