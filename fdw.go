@@ -56,6 +56,13 @@ func goFdwRegisterParallelWorker(pid C.int) {
 		// Use the interface method to register the worker
 		currentHub.RegisterParallelWorker(workerPid)
 		log.Printf("[DEBUG] Worker PID %d: Successfully registered with parallel worker coordinator", workerPid)
+
+		// Start a global coordinator if this is the first worker to register
+		// This coordinator will monitor ALL workers, including idle ones
+		coordinator := currentHub.GetParallelWorkerCoordinator()
+		if coordinator != nil {
+			coordinator.StartGlobalCoordinator()
+		}
 	} else {
 		log.Printf("[WARN] Worker PID %d: No hub instance available for worker registration", workerPid)
 	}
@@ -106,7 +113,7 @@ func init() {
 	if currentHub != nil {
 		currentHub.RegisterParallelWorker(os.Getpid())
 		log.Printf("[DEBUG] Worker PID %d: Registered for parallel worker coordination in init()", os.Getpid())
-		
+
 		// Start global timeout monitor for this worker
 		// This is critical for idle workers that never call any FDW functions
 		go func() {
@@ -116,11 +123,11 @@ func init() {
 				log.Printf("[DEBUG] Worker PID %d: No coordinator available for timeout monitoring", workerPid)
 				return
 			}
-			
+
 			// Check timeout every 5 seconds
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
-			
+
 			for {
 				select {
 				case <-ticker.C:
