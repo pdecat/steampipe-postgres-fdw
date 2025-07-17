@@ -348,10 +348,11 @@ func goFdwBeginForeignScan(node *C.ForeignScanState, eflags C.int) {
 				select {
 				case <-ticker.C:
 					if coordinator.ShouldWorkerTimeout() {
-						log.Printf("[INFO] Worker PID %d: Background timeout detected - idle worker should exit", workerPid)
-						// Signal the PostgreSQL process to terminate gracefully
-						// This is a last resort for workers that never iterate
-						os.Exit(0)
+						log.Printf("[INFO] Worker PID %d: Background timeout detected - marking worker for graceful termination", workerPid)
+						// Mark this worker as timed out so it can exit gracefully
+						// when IterateForeignScan is called (or return immediately if never called)
+						coordinator.MarkWorkerTimedOut(workerPid)
+						return // Exit the goroutine, don't force process exit
 					}
 				}
 			}
