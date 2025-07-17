@@ -381,6 +381,13 @@ func goFdwBeginForeignScan(node *C.ForeignScanState, eflags C.int) {
 		currentHub.RegisterParallelWorker(os.Getpid())
 		log.Printf("[DEBUG] Worker PID %d: Registered for parallel worker coordination in BeginForeignScan", os.Getpid())
 
+		// Start the global coordinator only once, when the first worker registers
+		// This coordinator will monitor ALL workers, including idle ones
+		coordinator := currentHub.GetParallelWorkerCoordinator()
+		if coordinator != nil {
+			coordinator.StartGlobalCoordinator()
+		}
+
 		// Start a background timeout monitor for this worker
 		// This is critical for idle workers that never call IterateForeignScan
 		go func() {
