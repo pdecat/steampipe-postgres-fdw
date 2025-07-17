@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -98,6 +99,47 @@ func init() {
 	log.Printf("[INFO] Worker PID %d: .\n******************************************************\n\n\t\tsteampipe postgres fdw init\n\n******************************************************\n", os.Getpid())
 	log.Printf("[INFO] Worker PID %d: Version:   v%s", os.Getpid(), version.FdwVersion.String())
 	log.Printf("[INFO] Worker PID %d: Log level: %s", os.Getpid(), level)
+
+	// Register this worker immediately when the FDW extension loads
+	// This catches ALL workers, including idle parallel workers that never call FDW functions
+	currentHub := hub.GetHub()
+	if currentHub != nil {
+		currentHub.RegisterParallelWorker(os.Getpid())
+		log.Printf("[DEBUG] Worker PID %d: Registered for parallel worker coordination in init()", os.Getpid())
+		
+		// Start global timeout monitor for this worker
+		// This is critical for idle workers that never call any FDW functions
+		go func() {
+			workerPid := os.Getpid()
+			coordinator := currentHub.GetParallelWorkerCoordinator()
+			if coordinator == nil {
+				log.Printf("[DEBUG] Worker PID %d: No coordinator available for timeout monitoring", workerPid)
+				return
+			}
+			
+			// Check timeout every 5 seconds
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			
+			for {
+				select {
+				case <-ticker.C:
+					if coordinator.ShouldWorkerTimeout() {
+						log.Printf("[INFO] Worker PID %d: Global timeout detected - idle worker should terminate", workerPid)
+						// For idle workers that never call FDW functions, we need to force termination
+						// This is the only way to handle workers that are completely idle
+						coordinator.MarkWorkerTimedOut(workerPid)
+						// Send SIGTERM to self to trigger graceful shutdown
+						// This is safer than os.Exit(0) as it allows PostgreSQL to handle cleanup
+						if err := syscall.Kill(workerPid, syscall.SIGTERM); err != nil {
+							log.Printf("[WARN] Worker PID %d: Failed to send SIGTERM to self: %v", workerPid, err)
+						}
+						return
+					}
+				}
+			}
+		}()
+	}
 
 	if _, found := os.LookupEnv("STEAMPIPE_FDW_PPROF"); found {
 		log.Printf("[INFO] Worker PID %d: PROFILING!!!!", os.Getpid())
