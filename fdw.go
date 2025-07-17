@@ -56,6 +56,13 @@ func goFdwRegisterParallelWorker(pid C.int) {
 		// Use the interface method to register the worker
 		currentHub.RegisterParallelWorker(workerPid)
 		log.Printf("[DEBUG] Worker PID %d: Successfully registered with parallel worker coordinator", workerPid)
+
+		// Start the global coordinator to monitor ALL workers, including idle ones
+		// This is essential to catch workers that never execute FDW functions
+		coordinator := currentHub.GetParallelWorkerCoordinator()
+		if coordinator != nil {
+			coordinator.StartGlobalCoordinator()
+		}
 	} else {
 		log.Printf("[WARN] Worker PID %d: No hub instance available for worker registration", workerPid)
 	}
