@@ -46,10 +46,11 @@ type hubBase struct {
 
 // ParallelWorkerCoordinator manages parallel worker lifecycle and timeout
 type ParallelWorkerCoordinator struct {
-	activeWorkers    map[int]struct{} // Track active worker PIDs
-	workerTimeout    int              // Timeout in seconds
-	executionStart   int64            // Execution start time (Unix timestamp)
-	coordinatorMutex sync.RWMutex     // Protects coordinator state
+	activeWorkers      map[int]struct{} // Track active worker PIDs
+	workerTimeout      int              // Timeout in seconds
+	executionStart     int64            // Execution start time (Unix timestamp)
+	coordinatorMutex   sync.RWMutex     // Protects coordinator state
+	coordinatorRunning bool             // Track if global coordinator is running
 }
 
 // NewParallelWorkerCoordinator creates a new coordinator with default timeout
@@ -109,8 +110,59 @@ func (pwc *ParallelWorkerCoordinator) MarkWorkerTimedOut(pid int) {
 func (pwc *ParallelWorkerCoordinator) GetActiveWorkerCount() int {
 	pwc.coordinatorMutex.RLock()
 	defer pwc.coordinatorMutex.RUnlock()
-
 	return len(pwc.activeWorkers)
+}
+
+// StartGlobalCoordinator starts a global coordinator that monitors all workers
+// This should only be called once, typically by the first worker to register
+func (pwc *ParallelWorkerCoordinator) StartGlobalCoordinator() {
+	pwc.coordinatorMutex.Lock()
+	defer pwc.coordinatorMutex.Unlock()
+
+	// Check if coordinator is already running
+	if pwc.coordinatorRunning {
+		return
+	}
+	pwc.coordinatorRunning = true
+
+	log.Printf("[INFO] Worker PID %d: Starting global parallel worker coordinator", os.Getpid())
+
+	// Start background coordinator goroutine
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				pwc.coordinatorMutex.RLock()
+				activeCount := len(pwc.activeWorkers)
+				shouldTimeout := pwc.ShouldWorkerTimeout()
+				pwc.coordinatorMutex.RUnlock()
+
+				if shouldTimeout && activeCount > 0 {
+					log.Printf("[INFO] Global Coordinator: Timeout detected with %d active workers", activeCount)
+
+					// Get list of active worker PIDs
+					pwc.coordinatorMutex.RLock()
+					var workerPids []int
+					for pid := range pwc.activeWorkers {
+						workerPids = append(workerPids, pid)
+					}
+					pwc.coordinatorMutex.RUnlock()
+
+					// Mark all workers as timed out
+					for _, pid := range workerPids {
+						log.Printf("[INFO] Global Coordinator: Marking worker PID %d as timed out", pid)
+						pwc.MarkWorkerTimedOut(pid)
+					}
+
+					// Exit coordinator after handling timeout
+					return
+				}
+			}
+		}
+	}()
 }
 
 // ResetExecution resets the execution start time for new parallel execution
