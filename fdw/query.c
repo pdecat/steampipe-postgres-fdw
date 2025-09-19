@@ -508,16 +508,18 @@ findPaths(PlannerInfo *root, RelOptInfo *baserel, List *possiblePaths,
         ppi->ppi_clauses = list_concat(ppi->ppi_clauses, allclauses);
         /* Add a simple parameterized path */
         foreignPath = create_foreignscan_path(
-            root,
-            baserel,
-            NULL, /* default pathtarget */
-            nbrows,
-            startupCost,
-            nbrows * baserel->reltarget->width,
-            NIL, /* no pathkeys */
-            NULL,
-            NULL,
-            NULL);
+          root,
+          baserel,
+          NULL, /* default pathtarget */
+          nbrows,
+          startupCost,
+          nbrows * baserel->reltarget->width,
+          NIL,  /* no pathkeys */
+          NULL, /* no required_outer */
+          NULL, /* no fdw_outerpath */
+          NULL, /* no fdw_restrictinfo */
+          NULL  /* no fdw_private */
+        );
 
         foreignPath->path.param_info = ppi;
         result = lappend(result, foreignPath);
