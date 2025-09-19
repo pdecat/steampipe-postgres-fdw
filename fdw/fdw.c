@@ -432,16 +432,18 @@ static void fdwGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid forei
 
   /* Add a simple default path */
   paths = lappend(paths, create_foreignscan_path(
-                             root,
-                             baserel,
-                             NULL, /* default pathtarget */
-                             baserel->rows,
-                             planstate->startupCost,
-                             baserel->rows * baserel->reltarget->width * 100000, // table scan is very expensive
-                             NIL,                                                /* no pathkeys */
-                             NULL,
-                             NULL,
-                              (void *)fdw_private));
+    root,
+    baserel,
+    NULL, /* default pathtarget */
+    baserel->rows,
+    planstate->startupCost,
+    baserel->rows * baserel->reltarget->width * 100000, /* table scan is very expensive */
+    NIL,  /* no pathkeys */
+    NULL, /* no required_outer */
+    NULL, /* no fdw_outerpath */
+    NULL, /* no fdw_restrictinfo */
+    (void *)fdw_private
+  ));
 
   /* Add each ForeignPath previously found */
   foreach (lc, paths)
@@ -454,14 +456,18 @@ static void fdwGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid forei
     {
       ForeignPath *newpath;
       newpath = create_foreignscan_path(
-          root,
-          baserel,
-          NULL, /* default pathtarget */
-          path->path.rows,
-          path->path.startup_cost, path->path.total_cost,
-          apply_pathkeys, NULL,
-          NULL,
-          (void *)fdw_private);
+        root,
+        baserel,
+        NULL, /* default pathtarget */
+        path->path.rows,
+        path->path.startup_cost,
+        path->path.total_cost,
+        apply_pathkeys,
+        NULL, /* no required_outer */
+        NULL, /* no fdw_outerpath */
+        NULL, /* no fdw_restrictinfo */
+        (void *)fdw_private
+      );
       newpath->path.param_info = path->path.param_info;
       add_path(baserel, (Path *)newpath);
     }
