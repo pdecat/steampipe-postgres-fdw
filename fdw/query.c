@@ -523,22 +523,15 @@ findPaths(PlannerInfo *root, RelOptInfo *baserel, List *possiblePaths,
         ppi->ppi_clauses = list_concat(ppi->ppi_clauses, allclauses);
         /* Add a simple parameterized path */
         foreignPath = create_foreignscan_path(
-            root, baserel,
-#if PG_VERSION_NUM >= 90600
+            root,
+            baserel,
             NULL, /* default pathtarget */
-#endif
             nbrows,
             startupCost,
-#if PG_VERSION_NUM >= 90600
             nbrows * baserel->reltarget->width,
-#else
-            nbrows * baserel->width,
-#endif
             NIL, /* no pathkeys */
             NULL,
-#if PG_VERSION_NUM >= 90500
             NULL,
-#endif
             NULL);
 
         foreignPath->path.param_info = ppi;
