@@ -530,17 +530,44 @@ findPaths(PlannerInfo *root, RelOptInfo *baserel, List *possiblePaths,
           outer_relids = bms_union(outer_relids, ec->ec_relids);
         }
       }
-      /* Do the same thing for the outer joins */
-      foreach (lc, list_union(root->left_join_clauses,
-                              root->right_join_clauses))
+      /* Do the same thing for the outer joins.
+       *
+       * PG18 introduced OuterJoinClauseInfo (NodeTag 321) as a wrapper
+       * around RestrictInfo for entries in left/right/full_join_clauses.
+       * Pre-PG18 these lists held RestrictInfo nodes directly, so
+       * list_union worked. On PG18, list_union calls equal() which is
+       * undefined for OuterJoinClauseInfo (declared with
+       * pg_node_attr(no_copy_equal, ...)), raising "unrecognized node
+       * type: 321". Unwrap the embedded RestrictInfo first; the PG18
+       * planner places each outer-join clause in exactly one of
+       * left_join_clauses / right_join_clauses, so concat without dedup
+       * is sufficient.
+       */
       {
-        RestrictInfo *ri = (RestrictInfo *)lfirst(lc);
-
-        if (isAttrInRestrictInfo(baserel->relid, attnum, ri))
+        List *outer_join_rinfos;
+#if PG_VERSION_NUM >= 180000
+        ListCell *oj_lc;
+        outer_join_rinfos = NIL;
+        foreach (oj_lc, root->left_join_clauses)
+          outer_join_rinfos = lappend(outer_join_rinfos,
+                                      ((OuterJoinClauseInfo *)lfirst(oj_lc))->rinfo);
+        foreach (oj_lc, root->right_join_clauses)
+          outer_join_rinfos = lappend(outer_join_rinfos,
+                                      ((OuterJoinClauseInfo *)lfirst(oj_lc))->rinfo);
+#else
+        outer_join_rinfos = list_union(root->left_join_clauses,
+                                       root->right_join_clauses);
+#endif
+        foreach (lc, outer_join_rinfos)
         {
-          clauses = lappend(clauses, ri);
-          outer_relids = bms_union(outer_relids,
-                                   ri->outer_relids);
+          RestrictInfo *ri = (RestrictInfo *)lfirst(lc);
+
+          if (isAttrInRestrictInfo(baserel->relid, attnum, ri))
+          {
+            clauses = lappend(clauses, ri);
+            outer_relids = bms_union(outer_relids,
+                                     ri->outer_relids);
+          }
         }
       }
       /* We did NOT find anything for this key, bail out */
