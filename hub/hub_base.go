@@ -74,8 +74,25 @@ func (pwc *ParallelWorkerCoordinator) RegisterWorker(pid int) {
 	pwc.coordinatorMutex.Lock()
 	defer pwc.coordinatorMutex.Unlock()
 
+	// When the active set transitions from empty to non-empty, a new
+	// parallel-execution batch begins. Reset executionStart so
+	// ShouldWorkerTimeout measures elapsed time from this batch's first
+	// registration rather than from the previous batch's last unregister —
+	// otherwise a quick succession of batches shortens the effective
+	// timeout window for each subsequent one.
+	if len(pwc.activeWorkers) == 0 {
+		pwc.executionStart = time.Now().Unix()
+	}
 	pwc.activeWorkers[pid] = struct{}{}
 	log.Printf("[DEBUG] Worker PID %d registered - total active: %d", pid, len(pwc.activeWorkers))
+}
+
+// IsWorkerEnrolled reports whether pid is currently registered.
+func (pwc *ParallelWorkerCoordinator) IsWorkerEnrolled(pid int) bool {
+	pwc.coordinatorMutex.RLock()
+	defer pwc.coordinatorMutex.RUnlock()
+	_, ok := pwc.activeWorkers[pid]
+	return ok
 }
 
 // UnregisterWorker removes a parallel worker from tracking
