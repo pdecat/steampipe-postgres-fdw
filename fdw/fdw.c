@@ -3,6 +3,7 @@
 #include "steampipe_postgres_fdw.h"
 #include "fdw_handlers.h"
 #include "nodes/plannodes.h"
+#include "access/parallel.h"
 #include "access/xact.h"
 #include "utils/guc.h"
 #include "utils/builtins.h"
@@ -78,11 +79,18 @@ void _PG_init(void)
     on_proc_exit(&exitHook, PointerGetDatum(NULL));
     RegisterXactCallback(pgfdw_xact_callback, NULL);
 
-    // Register this worker for parallel coordination when FDW extension loads
-    // This is critical to catch idle parallel workers that never execute FDW functions
-    // Only register if we're in a parallel context to avoid unnecessary registrations
-    elog(LOG, "[DEBUG] Worker PID %d: Registering worker for parallel coordination in _PG_init", getpid());
-    goFdwRegisterParallelWorker(getpid());
+    // Register this worker for parallel coordination when FDW extension loads,
+    // but only when running as an actual PG parallel worker. A normal client
+    // backend that loads the FDW must not enrol in the coordinator: its
+    // psycopg connection may sit idle longer than the timeout between
+    // queries, and self-SIGTERM on the next tick would surface to the client
+    // as "terminating connection due to administrator command".
+    if (IsParallelWorker()) {
+        elog(LOG, "[DEBUG] Worker PID %d: Registering parallel worker for FDW coordination in _PG_init", getpid());
+        goFdwRegisterParallelWorker(getpid());
+    } else {
+        elog(LOG, "[DEBUG] Worker PID %d: Not a parallel worker, skipping FDW coordinator registration in _PG_init", getpid());
+    }
 }
 
 /*

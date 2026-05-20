@@ -20,7 +20,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -100,46 +99,12 @@ func init() {
 	log.Printf("[INFO] Worker PID %d: Version:   v%s", os.Getpid(), version.FdwVersion.String())
 	log.Printf("[INFO] Worker PID %d: Log level: %s", os.Getpid(), level)
 
-	// Register this worker immediately when the FDW extension loads
-	// This catches ALL workers, including idle parallel workers that never call FDW functions
-	currentHub := hub.GetHub()
-	if currentHub != nil {
-		currentHub.RegisterParallelWorker(os.Getpid())
-		log.Printf("[DEBUG] Worker PID %d: Registered for parallel worker coordination in init()", os.Getpid())
-
-		// Start global timeout monitor for this worker
-		// This is critical for idle workers that never call any FDW functions
-		go func() {
-			workerPid := os.Getpid()
-			coordinator := currentHub.GetParallelWorkerCoordinator()
-			if coordinator == nil {
-				log.Printf("[DEBUG] Worker PID %d: No coordinator available for timeout monitoring", workerPid)
-				return
-			}
-
-			// Check timeout every 5 seconds
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ticker.C:
-					if coordinator.ShouldWorkerTimeout() {
-						log.Printf("[INFO] Worker PID %d: Global timeout detected - idle worker should terminate", workerPid)
-						// For idle workers that never call FDW functions, we need to force termination
-						// This is the only way to handle workers that are completely idle
-						coordinator.MarkWorkerTimedOut(workerPid)
-						// Send SIGTERM to self to trigger graceful shutdown
-						// This is safer than os.Exit(0) as it allows PostgreSQL to handle cleanup
-						if err := syscall.Kill(workerPid, syscall.SIGTERM); err != nil {
-							log.Printf("[WARN] Worker PID %d: Failed to send SIGTERM to self: %v", workerPid, err)
-						}
-						return
-					}
-				}
-			}
-		}()
-	}
+	// Parallel-worker coordinator enrolment is now driven exclusively from
+	// the C side: _PG_init enrols only when IsParallelWorker() is true, and
+	// fdwInitializeWorkerForeignScan enrols every real PG parallel worker
+	// that PG spawns for a foreign scan. A regular client backend must not
+	// be enrolled — otherwise a long-idle psycopg connection would self-
+	// SIGTERM on the next coordinator tick.
 
 	if _, found := os.LookupEnv("STEAMPIPE_FDW_PPROF"); found {
 		log.Printf("[INFO] Worker PID %d: PROFILING!!!!", os.Getpid())
@@ -374,48 +339,11 @@ func goFdwBeginForeignScan(node *C.ForeignScanState, eflags C.int) {
 
 	log.Printf("[DEBUG] Worker PID %d: goFdwBeginForeignScan() called", os.Getpid())
 
-	// Register this worker for parallel coordination and timeout monitoring
-	// This ensures all workers (including idle ones) are tracked
-	currentHub := hub.GetHub()
-	if currentHub != nil {
-		currentHub.RegisterParallelWorker(os.Getpid())
-		log.Printf("[DEBUG] Worker PID %d: Registered for parallel worker coordination in BeginForeignScan", os.Getpid())
+	// Coordinator enrolment happens C-side: _PG_init for the parallel worker
+	// process itself and fdwInitializeWorkerForeignScan via PG's parallel
+	// callbacks. BeginForeignScan must not enrol because it runs on the
+	// user-facing backend too.
 
-		// Start the global coordinator only once, when the first worker registers
-		// This coordinator will monitor ALL workers, including idle ones
-		coordinator := currentHub.GetParallelWorkerCoordinator()
-		if coordinator != nil {
-			coordinator.StartGlobalCoordinator()
-		}
-
-		// Start a background timeout monitor for this worker
-		// This is critical for idle workers that never call IterateForeignScan
-		go func() {
-			workerPid := os.Getpid()
-			coordinator := currentHub.GetParallelWorkerCoordinator()
-			if coordinator == nil {
-				log.Printf("[DEBUG] Worker PID %d: No coordinator available for timeout monitoring", workerPid)
-				return
-			}
-
-			// Check timeout every 5 seconds
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ticker.C:
-					if coordinator.ShouldWorkerTimeout() {
-						log.Printf("[INFO] Worker PID %d: Background timeout detected - marking worker for graceful termination", workerPid)
-						// Mark this worker as timed out so it can exit gracefully
-						// when IterateForeignScan is called (or return immediately if never called)
-						coordinator.MarkWorkerTimedOut(workerPid)
-						return // Exit the goroutine, don't force process exit
-					}
-				}
-			}
-		}()
-	}
 	logging.LogTime("[fdw] BeginForeignScan start")
 	rel := BuildRelation(node.ss.ss_currentRelation)
 	opts := GetFTableOptions(rel.ID)
@@ -530,13 +458,17 @@ func goFdwIterateForeignScan(node *C.ForeignScanState) *C.TupleTableSlot {
 	}()
 	log.Printf("[DEBUG] Worker PID %d: goFdwIterateForeignScan() called", os.Getpid())
 
-	// Check if this worker should timeout (for idle worker detection)
+	// Early-exit on timeout, but only for an enrolled parallel worker.
+	// A regular client backend is never enrolled, so this branch is dead for
+	// it — returning nil from a backend mid-scan would silently truncate
+	// rows. Returning nil from a real PG parallel worker, by contrast, is
+	// the documented way to signal end-of-scan and let PG reap it.
 	currentHub := hub.GetHub()
 	if currentHub != nil {
 		if coordinator := currentHub.GetParallelWorkerCoordinator(); coordinator != nil {
-			if coordinator.ShouldWorkerTimeout() {
-				log.Printf("[INFO] Worker PID %d: Worker timeout detected in IterateForeignScan - terminating idle worker", os.Getpid())
-				// Return empty result to signal completion and allow worker to exit
+			pid := os.Getpid()
+			if coordinator.IsWorkerEnrolled(pid) && coordinator.ShouldWorkerTimeout() {
+				log.Printf("[INFO] Worker PID %d: Worker timeout detected in IterateForeignScan - terminating idle worker", pid)
 				return nil
 			}
 		}
