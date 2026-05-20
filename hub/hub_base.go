@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc"
@@ -200,10 +201,19 @@ func (pwc *ParallelWorkerCoordinator) StartGlobalCoordinator() {
 					}
 					pwc.coordinatorMutex.RUnlock()
 
-					// Mark all workers as timed out
+					// Mark all workers as timed out and SIGTERM them so PG can
+					// reap the parallel worker and release the leader from
+					// BgworkerShutdown. Enrolment is now gated on
+					// IsParallelWorker() in _PG_init, so workerPids only ever
+					// holds real PG parallel workers — the client-backend
+					// hazard that motivated removing self-SIGTERM in 0.55 no
+					// longer applies here.
 					for _, pid := range workerPids {
 						log.Printf("[INFO] Worker PID %d: Global Coordinator: Marking worker PID %d as timed out", os.Getpid(), pid)
 						pwc.MarkWorkerTimedOut(pid)
+						if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+							log.Printf("[WARN] Worker PID %d: Global Coordinator: Failed to SIGTERM stuck parallel worker %d: %v", os.Getpid(), pid, err)
+						}
 					}
 
 					// Exit coordinator after handling timeout
