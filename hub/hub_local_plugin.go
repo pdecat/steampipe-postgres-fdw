@@ -8,6 +8,7 @@ import (
 //
 //nolint:unused // only newLocalHub reads it, and that is unused in this build
 var pluginAlias string
+var pluginVersion string
 
 //nolint:unused // only newLocalHub calls it, and that is unused in this build
 func getPluginFunc() plugin.PluginFunc {
