@@ -845,7 +845,7 @@ func (h *hubBase) shouldPushdownLimit(table string, qualMap map[string]*proto.Qu
 
 func (h *hubBase) initialiseTelemetry() error {
 	log.Printf("[TRACE] Worker PID %d: init telemetry", os.Getpid())
-	shutdownTelemetry, err := telemetry.Init(FdwName)
+	shutdownTelemetry, err := telemetry.Init("steampipe-plugin-"+pluginAlias, pluginVersion)
 	if err != nil {
 		return fmt.Errorf("failed to initialise telemetry: %s", err.Error())
 	}
