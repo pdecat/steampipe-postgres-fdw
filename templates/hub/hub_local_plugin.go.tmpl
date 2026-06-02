@@ -6,6 +6,7 @@ import (
 )
 
 var pluginAlias = "{{.Plugin}}"
+var pluginVersion = "{{.PluginVersion}}"
 
 func getPluginFunc() plugin.PluginFunc {
 	return {{.Plugin}}.Plugin
