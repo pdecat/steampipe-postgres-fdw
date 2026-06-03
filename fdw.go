@@ -113,7 +113,9 @@ func init() {
 	// be enrolled — otherwise a long-idle psycopg connection would self-
 	// SIGTERM on the next coordinator tick.
 
-	if _, found := os.LookupEnv("STEAMPIPE_FDW_PPROF"); found {
+	// gate on the variable's value, not its mere presence, so it can be shipped
+	// set to "false" as a real toggle
+	if pprof, found := os.LookupEnv("STEAMPIPE_FDW_PPROF"); found && (strings.EqualFold(pprof, "true") || pprof == "1") {
 		log.Printf("[INFO] Worker PID %d: PROFILING!!!!", os.Getpid())
 		go func() {
 			listener, err := net.Listen("tcp", "localhost:0")
