@@ -123,7 +123,14 @@ void exitHook(int code, Datum arg)
 }
 
 static bool fdwIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte) {
-	return getenv("STEAMPIPE_FDW_PARALLEL_SAFE") != NULL;
+	// Gate on the variable's value, not its mere presence: only "true"/"1"
+	// (case-insensitive) enable parallel foreign scans, so operators can ship
+	// the variable set to "false" as a real toggle.
+	const char *val = getenv("STEAMPIPE_FDW_PARALLEL_SAFE");
+	if (val == NULL) {
+		return false;
+	}
+	return pg_strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0;
 }
 
 /*
