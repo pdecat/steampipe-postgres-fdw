@@ -14,6 +14,15 @@ static ForeignScan *fdwGetForeignPlan(
     Plan *outer_plan
 );
 
+static bool fdwIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte);
+
+// Parallel execution callback declarations
+static Size fdwEstimateDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt);
+static void fdwInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate);
+static void fdwReInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate);
+static void fdwInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc, void *coordinate);
+static void fdwShutdownForeignScan(ForeignScanState *node);
+
 // Define our handling functions with Postgres, following the V1 protocol.
 PG_FUNCTION_INFO_V1(steampipe_{{.Plugin}}_fdw_handler);
 PG_FUNCTION_INFO_V1(steampipe_{{.Plugin}}_fdw_validator);
@@ -21,6 +30,7 @@ PG_FUNCTION_INFO_V1(steampipe_{{.Plugin}}_fdw_validator);
 
 Datum steampipe_{{.Plugin}}_fdw_handler(PG_FUNCTION_ARGS) {
   FdwRoutine *fdw_routine = makeNode(FdwRoutine);
+  fdw_routine->IsForeignScanParallelSafe = fdwIsForeignScanParallelSafe;
   fdw_routine->GetForeignRelSize = fdwGetForeignRelSize;
   fdw_routine->GetForeignPaths = fdwGetForeignPaths;
   fdw_routine->GetForeignPlan = fdwGetForeignPlan;
@@ -31,6 +41,13 @@ Datum steampipe_{{.Plugin}}_fdw_handler(PG_FUNCTION_ARGS) {
   fdw_routine->EndForeignScan = goFdwEndForeignScan;
   fdw_routine->ImportForeignSchema = goFdwImportForeignSchema;
   fdw_routine->ExecForeignInsert = goFdwExecForeignInsert;
+
+  // Add parallel execution callbacks
+  fdw_routine->EstimateDSMForeignScan = fdwEstimateDSMForeignScan;
+  fdw_routine->InitializeDSMForeignScan = fdwInitializeDSMForeignScan;
+  fdw_routine->ReInitializeDSMForeignScan = fdwReInitializeDSMForeignScan;
+  fdw_routine->InitializeWorkerForeignScan = fdwInitializeWorkerForeignScan;
+  fdw_routine->ShutdownForeignScan = fdwShutdownForeignScan;
 
 PG_RETURN_POINTER(fdw_routine);
 }
