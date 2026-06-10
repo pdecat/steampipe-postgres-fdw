@@ -47,7 +47,7 @@ void signal_handler(int sig) {
 void _PG_init(void)
 {
     // Log when the extension is loaded by any process
-    elog(LOG, "[DEBUG] Worker PID %d: _PG_init() called - FDW extension loading", getpid());
+    elog(DEBUG1, "Worker PID %d: _PG_init() called - FDW extension loading", getpid());
 
     // TACTICAL
     // certain postgres errors (`out of shared memory`, `schema already exists`)
@@ -86,10 +86,10 @@ void _PG_init(void)
     // queries, and self-SIGTERM on the next tick would surface to the client
     // as "terminating connection due to administrator command".
     if (IsParallelWorker()) {
-        elog(LOG, "[DEBUG] Worker PID %d: Registering parallel worker for FDW coordination in _PG_init", getpid());
+        elog(DEBUG1, "Worker PID %d: Registering parallel worker for FDW coordination in _PG_init", getpid());
         goFdwRegisterParallelWorker(getpid());
     } else {
-        elog(LOG, "[DEBUG] Worker PID %d: Not a parallel worker, skipping FDW coordinator registration in _PG_init", getpid());
+        elog(DEBUG1, "Worker PID %d: Not a parallel worker, skipping FDW coordinator registration in _PG_init", getpid());
     }
 }
 
@@ -113,7 +113,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 
 void exitHook(int code, Datum arg)
 {
-  elog(LOG, "[DEBUG] Worker PID %d: exitHook called with code %d - cleaning up worker resources", getpid(), code);
+  elog(DEBUG1, "Worker PID %d: exitHook called with code %d - cleaning up worker resources", getpid(), code);
 
   // Call Go cleanup function to ensure proper resource cleanup
   goFdwWorkerCleanup();
@@ -170,11 +170,11 @@ static bool shouldWorkerTimeout(FdwParallelCoordinate *coord, uint64 current_tim
 }
 
 static Size fdwEstimateDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt) {
-	elog(LOG, "[DEBUG] Worker PID %d: fdwEstimateDSMForeignScan() called", getpid());
+	elog(DEBUG1, "Worker PID %d: fdwEstimateDSMForeignScan() called", getpid());
 
 	// Allocate shared memory for worker coordination
 	Size size = sizeof(FdwParallelCoordinate);
-	elog(LOG, "[DEBUG] Worker PID %d: Estimating DSM size: %zu bytes for worker coordination", getpid(), size);
+	elog(DEBUG1, "Worker PID %d: Estimating DSM size: %zu bytes for worker coordination", getpid(), size);
 
 	return size;
 }
@@ -182,7 +182,7 @@ static Size fdwEstimateDSMForeignScan(ForeignScanState *node, ParallelContext *p
 static void fdwInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate) {
 	FdwParallelCoordinate *coord = (FdwParallelCoordinate *) coordinate;
 
-	elog(LOG, "[DEBUG] Worker PID %d: fdwInitializeDSMForeignScan() called - initializing coordination structure", getpid());
+	elog(DEBUG1, "Worker PID %d: fdwInitializeDSMForeignScan() called - initializing coordination structure", getpid());
 
 	// Initialize the coordination structure
 	pg_atomic_init_u32(&coord->active_workers, 0);
@@ -201,12 +201,12 @@ static void fdwInitializeDSMForeignScan(ForeignScanState *node, ParallelContext 
 		}
 	}
 
-	elog(LOG, "[DEBUG] Worker PID %d: Parallel coordination initialized - total_workers: %u, timeout: %d seconds",
+	elog(DEBUG1, "Worker PID %d: Parallel coordination initialized - total_workers: %u, timeout: %d seconds",
 		 getpid(), pcxt->nworkers, fdw_worker_timeout);
 }
 
 static void fdwReInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate) {
-	elog(LOG, "[DEBUG] Worker PID %d: fdwReInitializeDSMForeignScan() called", getpid());
+	elog(DEBUG1, "Worker PID %d: fdwReInitializeDSMForeignScan() called", getpid());
 
 	// Re-initialization typically happens when a parallel worker is restarted
 	// We don't need to do anything special here as the coordination structure
@@ -216,14 +216,14 @@ static void fdwReInitializeDSMForeignScan(ForeignScanState *node, ParallelContex
 static void fdwInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc, void *coordinate) {
 	FdwParallelCoordinate *coord = (FdwParallelCoordinate *) coordinate;
 
-	elog(LOG, "[DEBUG] Worker PID %d: fdwInitializeWorkerForeignScan() called", getpid());
+	elog(DEBUG1, "Worker PID %d: fdwInitializeWorkerForeignScan() called", getpid());
 
 	if (coord != NULL) {
 		// Register this worker as active
 		uint32 active_count = pg_atomic_fetch_add_u32(&coord->active_workers, 1) + 1;
 		uint32 total_workers = pg_atomic_read_u32(&coord->total_workers);
 
-		elog(LOG, "[DEBUG] Worker PID %d: Parallel worker initialized - active: %u/%u",
+		elog(DEBUG1, "Worker PID %d: Parallel worker initialized - active: %u/%u",
 			 getpid(), active_count, total_workers);
 
 		// This is the critical point - ALL parallel workers reach this callback
@@ -231,16 +231,16 @@ static void fdwInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc,
 		// Call Go function to register this worker properly
 		goFdwRegisterParallelWorker(getpid());
 
-		elog(LOG, "[DEBUG] Worker PID %d: Worker registered and ready for parallel execution with timeout monitoring", getpid());
+		elog(DEBUG1, "Worker PID %d: Worker registered and ready for parallel execution with timeout monitoring", getpid());
 	} else {
-		elog(LOG, "[DEBUG] Worker PID %d: No coordination structure available - worker initialized without timeout", getpid());
+		elog(DEBUG1, "Worker PID %d: No coordination structure available - worker initialized without timeout", getpid());
 		// Even without coordination structure, register the worker for timeout monitoring
 		goFdwRegisterParallelWorker(getpid());
 	}
 }
 
 static void fdwShutdownForeignScan(ForeignScanState *node) {
-	elog(LOG, "[DEBUG] Worker PID %d: fdwShutdownForeignScan() called", getpid());
+	elog(DEBUG1, "Worker PID %d: fdwShutdownForeignScan() called", getpid());
 
 	// This callback is called when parallel execution is shutting down
 	// It's our opportunity to clean up and signal other workers
@@ -249,7 +249,7 @@ static void fdwShutdownForeignScan(ForeignScanState *node) {
 	// PostgreSQL doesn't pass it to this callback. However, this callback
 	// being called indicates that the parallel execution is completing.
 
-	elog(LOG, "[DEBUG] Worker PID %d: Parallel execution shutting down - worker terminating gracefully", getpid());
+	elog(DEBUG1, "Worker PID %d: Parallel execution shutting down - worker terminating gracefully", getpid());
 
 	// Perform any necessary cleanup
 	// The actual worker coordination and timeout handling is done in the
