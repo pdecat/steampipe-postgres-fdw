@@ -407,8 +407,8 @@ github.com/tklauser/numcpus v0.10.0 h1:18njr6LDBk1zuna922MgdjQuJFjrdppsZG60sHGfj
 github.com/tklauser/numcpus v0.10.0/go.mod h1:BiTKazU708GQTYF4mB+cmlpT2Is1gLk7XVuEeem8LsQ=
 github.com/tkrajina/go-reflector v0.5.8 h1:yPADHrwmUbMq4RGEyaOUpz2H90sRsETNVpjzo3DLVQQ=
 github.com/tkrajina/go-reflector v0.5.8/go.mod h1:ECbqLgccecY5kPmPmXg1MrHW585yMcDkVl6IvJe64T4=
-github.com/turbot/go-kit v1.3.0 h1:6cIYPAO5hO9fG7Zd5UBC4Ch3+C6AiiyYS0UQnrUlTV0=
-github.com/turbot/go-kit v1.3.0/go.mod h1:piKJMYCF8EYmKf+D2B78Csy7kOHGmnQVOWingtLKWWQ=
+github.com/turbot/go-kit v1.3.1 h1:RGyqY9E57L0HVBLJ64ArzcIy/8jC8YaK9da+VMtoq3o=
+github.com/turbot/go-kit v1.3.1/go.mod h1:hW2nItIxNEYRQbwqsMKmEfyKiuvKZPnjuYso65b8DL4=
 github.com/turbot/pipe-fittings/v2 v2.9.1 h1:1dwVsaIsdUIVLfRlvhNEm7KxTmpPuUoyEBbbioaoOUw=
 github.com/turbot/pipe-fittings/v2 v2.9.1/go.mod h1:OmmhCd4ALeWwfUpwZN/0pTNhfNmh/kwewOHRVWsRHY4=
 github.com/turbot/pipes-sdk-go v0.12.1 h1:mF9Z9Mr6F0uqlWjd1mQn+jqT24GPvWDFDrFTvmkazHc=
