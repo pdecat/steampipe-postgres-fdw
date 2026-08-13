@@ -34,6 +34,8 @@ github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d h1:licZJFw2RwpH
 github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d/go.mod h1:asat636LX7Bqt5lYEZ27JNDcqxfjdBQuJ/MM4CN/Lzo=
 github.com/agext/levenshtein v1.2.3 h1:YB2fHEn0UJagG8T1rrWknE3ZQzWM06O8AMAatNn7lmo=
 github.com/agext/levenshtein v1.2.3/go.mod h1:JEDfjyjHDjOF/1e4FlBE/PkbqA9OfWu2ki2W0IB5558=
+github.com/allegro/bigcache/v3 v3.1.0 h1:H2Vp8VOvxcrB91o86fUSVJFqeuz8kpyyB02eH3bSzwk=
+github.com/allegro/bigcache/v3 v3.1.0/go.mod h1:aPyh7jEvrog9zAwx5N7+JUQX5dZTSGpxF1LAR4dr35I=
 github.com/apparentlymart/go-cidr v1.1.0 h1:2mAhrMoF+nhXqxTzSZMUzDHkLjmIHC+Zzn4tdgBZjnU=
 github.com/apparentlymart/go-cidr v1.1.0/go.mod h1:EBcsNrHc3zQeuaeCeCtQruQm+n9/YjEn/vI25Lg7Gwc=
 github.com/apparentlymart/go-dump v0.0.0-20190214190832-042adf3cf4a0 h1:MzVXffFUye+ZcSR6opIgz9Co7WcDx6ZcY+RjfFHoA0I=
@@ -119,6 +121,8 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/eko/gocache/lib/v4 v4.2.0 h1:MNykyi5Xw+5Wu3+PUrvtOCaKSZM1nUSVftbzmeC7Yuw=
 github.com/eko/gocache/lib/v4 v4.2.0/go.mod h1:7ViVmbU+CzDHzRpmB4SXKyyzyuJ8A3UW3/cszpcqB4M=
+github.com/eko/gocache/store/bigcache/v4 v4.2.2 h1:zS8wjE/MqNQZOZMa19urItNIiVPE1CktJpmaGhPv9yE=
+github.com/eko/gocache/store/bigcache/v4 v4.2.2/go.mod h1:B3EPikcLx486f5Xw3YtFjm3oWnKGYngxJW4v1/n5L5g=
 github.com/eko/gocache/store/ristretto/v4 v4.2.2 h1:lXFzoZ5ck6Gy6ON7f5DHSkNt122qN7KoroCVgVwF7oo=
 github.com/eko/gocache/store/ristretto/v4 v4.2.2/go.mod h1:uIvBVJzqRepr5L0RsbkfQ2iYfbyos2fuji/s4yM+aUM=
 github.com/elazarl/goproxy v1.7.2 h1:Y2o6urb7Eule09PjlhQRGNsqRfPmYI3KKQLFpCAV3+o=
@@ -304,6 +308,8 @@ github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8
 github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
 github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJwooC2xJA040=
 github.com/opencontainers/image-spec v1.1.1/go.mod h1:qpqAh3Dmcf36wStyyWU+kCeDgrGnAve2nCC8+7h8Q0M=
+github.com/pdecat/steampipe-plugin-sdk/v6 v6.0.1-dev1 h1:AfS7ObeNxbDveStyRmjemJ0Bw3Nq1GTjkU5zyM3V4fc=
+github.com/pdecat/steampipe-plugin-sdk/v6 v6.0.1-dev1/go.mod h1:CIMDhrEuWC9+x+y1fOBdWnCHFCDHKBfob7aNOlNoJbY=
 github.com/pelletier/go-toml/v2 v2.2.3 h1:YmeHyLY8mFWbdkNWwpr+qIL2bEqT0o95WSdkNHvL12M=
 github.com/pelletier/go-toml/v2 v2.2.3/go.mod h1:MfCQTFTvCcUyyvvwm1+G6H/jORL20Xlb6rzQu9GuUkc=
 github.com/pjbgf/sha1cd v0.6.0 h1:3WJ8Wz8gvDz29quX1OcEmkAlUg9diU4GxJHqs0/XiwU=
@@ -383,8 +389,6 @@ github.com/turbot/pipe-fittings/v2 v2.9.5 h1:NMMYL3zH15XsRQQia9RkAYyzZK7+HkYPdIy
 github.com/turbot/pipe-fittings/v2 v2.9.5/go.mod h1:kqRlXCgosJOpEwodMwZwi1qvXf7UE6QS50ZzndEhoaU=
 github.com/turbot/pipes-sdk-go v0.12.1 h1:mF9Z9Mr6F0uqlWjd1mQn+jqT24GPvWDFDrFTvmkazHc=
 github.com/turbot/pipes-sdk-go v0.12.1/go.mod h1:iQE0ebN74yqiCRrfv7izxVMRcNlZftPWWDPsMFwejt4=
-github.com/turbot/steampipe-plugin-sdk/v6 v6.2.1 h1:YRY5I8D59x/f2h0gvzigGU67myE2MgoH1GooDqMyuFc=
-github.com/turbot/steampipe-plugin-sdk/v6 v6.2.1/go.mod h1:a0yeTdS+Hj4ENHARhZJkSXOi+lwwElO1iHIgQK/QYs4=
 github.com/turbot/steampipe/v2 v2.4.10-0.20261111115954-600783961125 h1:5pnEocHbwLsq4gs1r04T5vrg1IcPMtIFeedsyJUElUA=
 github.com/turbot/steampipe/v2 v2.4.10-0.20261111115954-600783961125/go.mod h1:DT42HUz1IBiJGosVLnkPAloqBeKgEoi15Dw9y3nzJ98=
 github.com/turbot/terraform-components v0.0.0-20250114051614-04b806a9cbed h1:1ROP+kYJ0vaJu04qpQO5V2PVrUqG7VZmYXzcyP/yDT0=
