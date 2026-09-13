@@ -227,4 +227,4 @@ replace (
 	oras.land/oras-go => oras.land/oras-go v1.1.0
 )
 
-replace github.com/turbot/steampipe-plugin-sdk/v6 => github.com/pdecat/steampipe-plugin-sdk/v6 v6.0.1-dev1
+replace github.com/turbot/steampipe-plugin-sdk/v6 => github.com/pdecat/steampipe-plugin-sdk/v6 v6.1.1-dev1
