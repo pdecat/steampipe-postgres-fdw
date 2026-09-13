@@ -8,7 +8,7 @@ require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-version v1.8.0 // indirect
 	github.com/turbot/go-kit v1.3.1
-	github.com/turbot/steampipe-plugin-sdk/v6 v6.0.0
+	github.com/turbot/steampipe-plugin-sdk/v6 v6.1.0
 	go.opentelemetry.io/otel v1.44.0
 	google.golang.org/protobuf v1.36.11
 )
@@ -231,4 +231,4 @@ replace (
 	oras.land/oras-go => oras.land/oras-go v1.1.0
 )
 
-replace github.com/turbot/steampipe-plugin-sdk/v6 => github.com/pdecat/steampipe-plugin-sdk/v6 v6.0.1-dev1
+replace github.com/turbot/steampipe-plugin-sdk/v6 => github.com/pdecat/steampipe-plugin-sdk/v6 v6.1.1-dev1

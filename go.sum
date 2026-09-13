@@ -332,8 +332,8 @@ github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8
 github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
 github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJwooC2xJA040=
 github.com/opencontainers/image-spec v1.1.1/go.mod h1:qpqAh3Dmcf36wStyyWU+kCeDgrGnAve2nCC8+7h8Q0M=
-github.com/pdecat/steampipe-plugin-sdk/v6 v6.0.1-dev1 h1:AfS7ObeNxbDveStyRmjemJ0Bw3Nq1GTjkU5zyM3V4fc=
-github.com/pdecat/steampipe-plugin-sdk/v6 v6.0.1-dev1/go.mod h1:CIMDhrEuWC9+x+y1fOBdWnCHFCDHKBfob7aNOlNoJbY=
+github.com/pdecat/steampipe-plugin-sdk/v6 v6.1.1-dev1 h1:9Qmkw7lNaCZ/A7I+2Rkkt5PGCZcAQ1M4NE3aE6eKr/g=
+github.com/pdecat/steampipe-plugin-sdk/v6 v6.1.1-dev1/go.mod h1:CIMDhrEuWC9+x+y1fOBdWnCHFCDHKBfob7aNOlNoJbY=
 github.com/pelletier/go-toml/v2 v2.2.3 h1:YmeHyLY8mFWbdkNWwpr+qIL2bEqT0o95WSdkNHvL12M=
 github.com/pelletier/go-toml/v2 v2.2.3/go.mod h1:MfCQTFTvCcUyyvvwm1+G6H/jORL20Xlb6rzQu9GuUkc=
 github.com/pjbgf/sha1cd v0.6.0 h1:3WJ8Wz8gvDz29quX1OcEmkAlUg9diU4GxJHqs0/XiwU=
