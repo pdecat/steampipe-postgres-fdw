@@ -236,7 +236,7 @@ func (i *scanIteratorBase) watchForCancellation(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if isQueryCancelPending() {
-				log.Printf("[INFO] Postgres query cancel pending; cancelling iterator (%p)", i)
+				log.Printf("[WARN] Worker PID %d: Postgres query cancel pending; cancelling iterator %p (table %s)", os.Getpid(), i, i.table)
 				i.cancel()
 				return
 			}
