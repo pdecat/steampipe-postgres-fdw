@@ -102,6 +102,9 @@ func init() {
 	hub.SetQueryCancelChecker(func() bool {
 		return C.fdw_query_cancel_pending() != 0
 	})
+	// log the goroutine stacks of a backend that leaves a cancel or terminate
+	// request unserviced, which the per-scan watcher above cannot reach
+	hub.StartCancelStallReporter()
 	log.Printf("[INFO] Worker PID %d: .\n******************************************************\n\n\t\tsteampipe postgres fdw init\n\n******************************************************\n", os.Getpid())
 	log.Printf("[INFO] Worker PID %d: Version:   v%s", os.Getpid(), version.FdwVersion.String())
 	log.Printf("[INFO] Worker PID %d: Log level: %s", os.Getpid(), level)
