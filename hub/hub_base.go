@@ -115,7 +115,17 @@ func (pwc *ParallelWorkerCoordinator) UnregisterWorker(pid int) {
 func (pwc *ParallelWorkerCoordinator) ShouldWorkerTimeout() bool {
 	pwc.coordinatorMutex.RLock()
 	defer pwc.coordinatorMutex.RUnlock()
+	return pwc.shouldWorkerTimeoutLocked()
+}
 
+// shouldWorkerTimeoutLocked is ShouldWorkerTimeout for a caller that already
+// holds coordinatorMutex. Never take the read lock twice: sync.RWMutex makes a
+// second RLock wait behind any writer that queued after the first one, and
+// that writer waits for the first RLock to be released, so neither wakes. In a
+// parallel worker that writer is UnregisterWorker on the backend's main thread,
+// which then never returns to Postgres and leaves the leader waiting on
+// BgworkerShutdown forever.
+func (pwc *ParallelWorkerCoordinator) shouldWorkerTimeoutLocked() bool {
 	elapsed := time.Now().Unix() - pwc.executionStart
 	return elapsed > int64(pwc.workerTimeout)
 }
@@ -128,6 +138,14 @@ func (pwc *ParallelWorkerCoordinator) MarkWorkerTimedOut(pid int) {
 	// Remove from active workers since it's timing out
 	delete(pwc.activeWorkers, pid)
 	log.Printf("[DEBUG] Worker PID %d marked as timed out - removed from active workers, total active: %d", pid, len(pwc.activeWorkers))
+}
+
+// timeoutSnapshot returns the active worker count and the timeout verdict, read
+// under a single read lock.
+func (pwc *ParallelWorkerCoordinator) timeoutSnapshot() (int, bool) {
+	pwc.coordinatorMutex.RLock()
+	defer pwc.coordinatorMutex.RUnlock()
+	return len(pwc.activeWorkers), pwc.shouldWorkerTimeoutLocked()
 }
 
 // GetActiveWorkerCount returns the number of active workers
@@ -172,10 +190,7 @@ func (pwc *ParallelWorkerCoordinator) StartGlobalCoordinator() {
 			case <-ticker.C:
 				iterations++
 
-				pwc.coordinatorMutex.RLock()
-				activeCount := len(pwc.activeWorkers)
-				shouldTimeout := pwc.ShouldWorkerTimeout()
-				pwc.coordinatorMutex.RUnlock()
+				activeCount, shouldTimeout := pwc.timeoutSnapshot()
 
 				// Exit if no workers are active for several iterations
 				if activeCount == 0 {
@@ -229,7 +244,7 @@ func (pwc *ParallelWorkerCoordinator) CheckForIdleWorkers() []int {
 	pwc.coordinatorMutex.RLock()
 	defer pwc.coordinatorMutex.RUnlock()
 
-	if !pwc.ShouldWorkerTimeout() {
+	if !pwc.shouldWorkerTimeoutLocked() {
 		return nil
 	}
 
