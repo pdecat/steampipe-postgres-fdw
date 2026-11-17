@@ -53,9 +53,14 @@ type ParallelWorkerCoordinator struct {
 	coordinatorRunning bool             // Track if global coordinator is running
 }
 
-// NewParallelWorkerCoordinator creates a new coordinator with default timeout
+// NewParallelWorkerCoordinator creates a new coordinator. The worker timeout is off
+// unless STEAMPIPE_FDW_WORKER_TIMEOUT sets a number of seconds: a parallel worker can
+// run a whole Parallel Append branch on its own, and once it was cut at a fixed 30
+// seconds its scan ended early with no error, so the rows it had not read yet were
+// silently missing from the query's result. PostgreSQL already terminates the workers
+// when their leader's query ends or is cancelled, statement_timeout included.
 func NewParallelWorkerCoordinator() *ParallelWorkerCoordinator {
-	timeout := 30 // Default 30 seconds
+	timeout := 0 // disabled
 	if envTimeout := os.Getenv("STEAMPIPE_FDW_WORKER_TIMEOUT"); envTimeout != "" {
 		if customTimeout, err := strconv.Atoi(envTimeout); err == nil && customTimeout > 0 {
 			timeout = customTimeout
@@ -126,8 +131,17 @@ func (pwc *ParallelWorkerCoordinator) ShouldWorkerTimeout() bool {
 // which then never returns to Postgres and leaves the leader waiting on
 // BgworkerShutdown forever.
 func (pwc *ParallelWorkerCoordinator) shouldWorkerTimeoutLocked() bool {
+	if pwc.workerTimeout <= 0 {
+		return false
+	}
 	elapsed := time.Now().Unix() - pwc.executionStart
 	return elapsed > int64(pwc.workerTimeout)
+}
+
+// Timeout returns the worker timeout in seconds, 0 when it is off. It is set once, when
+// the coordinator is created, so it needs no lock.
+func (pwc *ParallelWorkerCoordinator) Timeout() int {
+	return pwc.workerTimeout
 }
 
 // MarkWorkerTimedOut marks a worker as timed out for graceful termination
