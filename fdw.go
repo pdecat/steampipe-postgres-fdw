@@ -487,17 +487,18 @@ func goFdwIterateForeignScan(node *C.ForeignScanState) *C.TupleTableSlot {
 	}()
 	log.Printf("[DEBUG] Worker PID %d: goFdwIterateForeignScan() called", os.Getpid())
 
-	// Early-exit on timeout, but only for an enrolled parallel worker.
-	// A regular client backend is never enrolled, so this branch is dead for
-	// it — returning nil from a backend mid-scan would silently truncate
-	// rows. Returning nil from a real PG parallel worker, by contrast, is
-	// the documented way to signal end-of-scan and let PG reap it.
+	// Fail an enrolled parallel worker's scan once it runs past the worker timeout,
+	// which is off unless STEAMPIPE_FDW_WORKER_TIMEOUT sets it. Never return nil here:
+	// nil is end of scan, and a worker can run a whole Parallel Append branch, so the
+	// rows it has not read yet would be missing from the result with no error at all.
+	// A regular client backend is never enrolled, so this never applies to it.
 	currentHub := hub.GetHub()
 	if currentHub != nil {
 		if coordinator := currentHub.GetParallelWorkerCoordinator(); coordinator != nil {
 			pid := os.Getpid()
 			if coordinator.IsWorkerEnrolled(pid) && coordinator.ShouldWorkerTimeout() {
-				log.Printf("[INFO] Worker PID %d: Worker timeout detected in IterateForeignScan - terminating idle worker", pid)
+				log.Printf("[WARN] Worker PID %d: parallel worker scan ran past STEAMPIPE_FDW_WORKER_TIMEOUT (%ds), failing it", pid, coordinator.Timeout())
+				FdwError(fmt.Errorf("parallel worker scan ran past STEAMPIPE_FDW_WORKER_TIMEOUT (%d seconds)", coordinator.Timeout()))
 				return nil
 			}
 		}
